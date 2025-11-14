@@ -883,9 +883,19 @@ void handle_packet_send_event(Event event) {
         fprintf(stderr, "[DESD ERROR] handle_packet_send_event: Failed to parse payload JSON.\n");
         return;
     }
-    const char *request_id = json_string_value(json_object_get(payload_obj, "request_id"));
-    const char *destination_abstract_address = json_string_value(json_object_get(payload_obj, "destination_abstract_address"));
-    // const char *packet_data_base64 = json_string_value(json_object_get(payload_obj, "packet_data_base64")); // 不再需要
+    const char *request_id_ptr = json_string_value(json_object_get(payload_obj, "request_id"));
+    const char *destination_abstract_address_ptr = json_string_value(json_object_get(payload_obj, "destination_abstract_address"));
+    
+    // 复制到本地缓冲区，防止 json_decref 后访问无效内存
+    char request_id[64] = {0};
+    char destination_abstract_address[256] = {0};
+    if (request_id_ptr) {
+        strncpy(request_id, request_id_ptr, sizeof(request_id) - 1);
+    }
+    if (destination_abstract_address_ptr) {
+        strncpy(destination_abstract_address, destination_abstract_address_ptr, sizeof(destination_abstract_address) - 1);
+    }
+    
     json_decref(payload_obj);
 
     // send()操作本身是瞬时的，发送方不会阻塞
@@ -943,8 +953,14 @@ void handle_packet_receive_event(Event event) {
         fprintf(stderr, "[DESD ERROR] handle_packet_receive_event: Failed to parse payload JSON.\n");
         return;
     }
-    const char *destination_abstract_address = json_string_value(json_object_get(payload_obj, "destination_abstract_address"));
-    // 不再需要packet_data_base64
+    const char *destination_abstract_address_ptr = json_string_value(json_object_get(payload_obj, "destination_abstract_address"));
+    
+    // 复制到本地缓冲区，防止 json_decref 后访问无效内存
+    char destination_abstract_address[256] = {0};
+    if (destination_abstract_address_ptr) {
+        strncpy(destination_abstract_address, destination_abstract_address_ptr, sizeof(destination_abstract_address) - 1);
+    }
+    
     json_decref(payload_obj);
 
     if (target_router_id > 0 && target_router_id <= MAX_ROUTERS) {
