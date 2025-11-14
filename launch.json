@@ -1,0 +1,35 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "C++ Debug",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/desd",  // 你的可执行文件
+      "args": [],  // 如果需要，传入程序的命令行参数
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [
+        {
+          "name": "LD_LIBRARY_PATH",
+          "value": "/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"  // 设置动态库路径
+        }
+      ],
+      "externalConsole": false,  // 是否在外部控制台中启动程序
+      "MIMode": "gdb",  // 使用 GDB 调试
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ],
+      "miDebuggerPath": "/usr/bin/gdb",  // GDB 路径（根据实际情况修改）
+      "preLaunchTask": "build",  // 可选，设置在启动调试前进行构建（如果你有构建任务）
+      "miDebuggerServerAddress": "localhost:1234",  // 如果是远程调试，可以设置服务器地址
+      "sourceFileMap": {
+        "/usr/src/debug": "${workspaceFolder}/src"
+      }
+    }
+  ]
+}
