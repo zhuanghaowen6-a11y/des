@@ -208,6 +208,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     json_t *payload_obj = json_object();
     json_object_set_new(payload_obj, "destination_abstract_address", json_string(ROUTER_SOCKET_PATH));
     json_object_set_new(payload_obj, "request_id", json_string(connect_req.request_id));
+    json_object_set_new(payload_obj, "socket_fd", json_integer(sockfd));  // 添加 socket_fd
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     strncpy(connect_req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
     connect_req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
@@ -296,8 +297,40 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
             
             printf("[LIBDESHOOK] R%d accept() unblocked by DESD. Now performing real accept.\n", my_router_id);
             if (resp_payload_obj) json_decref(resp_payload_obj);
+            
             // 2. DESD解除阻塞后，调用真实的accept()
-            return real_accept(sockfd, addr, addrlen);
+            int new_fd = real_accept(sockfd, addr, addrlen);
+            if (new_fd < 0) {
+                return new_fd;  // accept 失败，直接返回
+            }
+            
+            // 3. accept 成功，发送 CONNECTION_INFO_EVENT 给 desd，通知新连接的 fd
+            Message conn_info;
+            memset(&conn_info, 0, sizeof(Message));
+            conn_info.message_type = HOOK_TO_DESD;
+            conn_info.router_id = my_router_id;
+            conn_info.event_type = CONNECTION_INFO_EVENT;
+            conn_info.virtual_time = current_virtual_time;
+            generate_request_id(conn_info.request_id);
+            
+            json_t *conn_payload_obj = json_object();
+            json_object_set_new(conn_payload_obj, "socket_fd", json_integer(new_fd));
+            json_object_set_new(conn_payload_obj, "listen_fd", json_integer(sockfd));
+            json_object_set_new(conn_payload_obj, "request_id", json_string(conn_info.request_id));
+            char *conn_payload_str = json_dumps(conn_payload_obj, JSON_COMPACT);
+            strncpy(conn_info.payload.json_str, conn_payload_str, MAX_MSG_SIZE - 1);
+            conn_info.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+            free(conn_payload_str);
+            json_decref(conn_payload_obj);
+            
+            Message conn_resp;
+            if (send_msg_to_desd_and_wait_for_response(&conn_info, &conn_resp)) {
+                printf("[LIBDESHOOK] R%d notified DESD of new connection fd %d.\n", my_router_id, new_fd);
+            } else {
+                fprintf(stderr, "[LIBDESHOOK WARNING] R%d failed to notify DESD of new connection.\n", my_router_id);
+            }
+            
+            return new_fd;
 
         } else {
             const char* error_message = "Unknown error";
@@ -348,6 +381,7 @@ ssize_t send(int sockfd, const void *buf, size_t len, int flags) {
     json_object_set_new(payload_obj, "destination_abstract_address", json_string(ROUTER_SOCKET_PATH)); // 简化处理，假设发往ROUTER_SOCKET_PATH
     json_object_set_new(payload_obj, "request_id", json_string(send_req.request_id));
     json_object_set_new(payload_obj, "bytes_sent", json_integer(len)); // Use len, not bytes_sent from real_send yet
+    json_object_set_new(payload_obj, "socket_fd", json_integer(sockfd));  // 添加 socket_fd
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     if (!payload_str) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Failed to dump JSON\n");
