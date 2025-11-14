@@ -24,7 +24,8 @@ typedef enum {
     PACKET_RECEIVE_EVENT,     // desd内部事件：数据包到达目的路由器socket缓冲区
     TIMEOUT_EVENT,            // desd内部事件：模拟select或connect的超时
     CONNECT_REQUEST_EVENT,    // libdeshook.so -> desd：路由器请求建立连接（connect）
-    CONNECTION_ESTABLISHED_EVENT // desd内部事件：连接在虚拟时间上建立
+    CONNECTION_ESTABLISHED_EVENT, // desd内部事件：连接在虚拟时间上建立
+    LISTEN_EVENT              // libdeshook.so -> desd：路由器开始监听（listen）
 
 } EventType;
 

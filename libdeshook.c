@@ -564,10 +564,69 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     return real_bind(sockfd, addr, addrlen);
 }
 
-// listen - 简单拦截，不与DESD交互
+// listen - 向 desd 通知开始监听
 int listen(int sockfd, int backlog) {
-    printf("[LIBDESHOOK] R%d intercepted listen() on sockfd %d. Allowing real listen.\n", my_router_id, sockfd);
-    return real_listen(sockfd, backlog);
+    if (desd_control_socket_fd == -1) {
+        return real_listen(sockfd, backlog);
+    }
+
+    printf("[LIBDESHOOK] R%d intercepted listen() on sockfd %d.\n", my_router_id, sockfd);
+
+    // 首先执行真实的 listen()
+    int result = real_listen(sockfd, backlog);
+    if (result != 0) {
+        // listen 失败，直接返回
+        return result;
+    }
+
+    // listen 成功后，获取 socket 绑定的地址
+    struct sockaddr_un addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(sockfd, (struct sockaddr *)&addr, &addr_len) != 0) {
+        fprintf(stderr, "[LIBDESHOOK ERROR] R%d failed to get socket name for fd %d.\n", my_router_id, sockfd);
+        return result; // listen 已经成功，所以返回成功
+    }
+
+    // 向 desd 发送 LISTEN_EVENT
+    Message listen_msg;
+    memset(&listen_msg, 0, sizeof(Message));
+    listen_msg.message_type = HOOK_TO_DESD;
+    listen_msg.router_id = my_router_id;
+    listen_msg.event_type = LISTEN_EVENT;
+    listen_msg.virtual_time = current_virtual_time;
+    generate_request_id(listen_msg.request_id);
+
+    json_t *payload_obj = json_object();
+    json_object_set_new(payload_obj, "listen_address", json_string(addr.sun_path));
+    json_object_set_new(payload_obj, "request_id", json_string(listen_msg.request_id));
+    char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
+    strncpy(listen_msg.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+    listen_msg.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+    free(payload_str);
+    json_decref(payload_obj);
+
+    Message listen_resp;
+    if (send_msg_to_desd_and_wait_for_response(&listen_msg, &listen_resp)) {
+        json_error_t error;
+        json_t *resp_payload_obj = json_loads(listen_resp.payload.json_str, 0, &error);
+        json_t *status_json = NULL;
+        if (resp_payload_obj) {
+            status_json = json_object_get(resp_payload_obj, "status");
+        }
+
+        if (status_json && json_is_string(status_json) &&
+            strcmp(json_string_value(status_json), "SUCCESS") == 0) {
+            printf("[LIBDESHOOK] R%d listen() registered with DESD on %s.\n", my_router_id, addr.sun_path);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+        } else {
+            fprintf(stderr, "[LIBDESHOOK WARNING] R%d listen() registration with DESD failed.\n", my_router_id);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+        }
+    } else {
+        fprintf(stderr, "[LIBDESHOOK ERROR] R%d listen() failed to communicate with desd.\n", my_router_id);
+    }
+
+    return result;
 }
 
 // unlink - 简单拦截，不与DESD交互

@@ -32,7 +32,8 @@ char* event_to_json(const Event* event) {
         event->event_type == PACKET_RECEIVE_EVENT ? "PACKET_RECEIVE_EVENT" :
         event->event_type == TIMEOUT_EVENT ? "TIMEOUT_EVENT" :
         event->event_type == CONNECT_REQUEST_EVENT ? "CONNECT_REQUEST_EVENT" :
-        event->event_type == CONNECTION_ESTABLISHED_EVENT ? "CONNECTION_ESTABLISHED_EVENT" : "UNKNOWN"
+        event->event_type == CONNECTION_ESTABLISHED_EVENT ? "CONNECTION_ESTABLISHED_EVENT" :
+        event->event_type == LISTEN_EVENT ? "LISTEN_EVENT" : "UNKNOWN"
     ));
     json_object_set_new(root, "event_id", json_integer(event->event_id));
     
@@ -70,6 +71,7 @@ void json_to_event(const char* json_str, Event* event) {
     else if (event_type_str && strcmp(event_type_str, "TIMEOUT_EVENT") == 0) event->event_type = TIMEOUT_EVENT;
     else if (event_type_str && strcmp(event_type_str, "CONNECT_REQUEST_EVENT") == 0) event->event_type = CONNECT_REQUEST_EVENT;
     else if (event_type_str && strcmp(event_type_str, "CONNECTION_ESTABLISHED_EVENT") == 0) event->event_type = CONNECTION_ESTABLISHED_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "LISTEN_EVENT") == 0) event->event_type = LISTEN_EVENT;
     else event->event_type = -1; // Unknown
 
     event->event_id = json_integer_value(json_object_get(root, "event_id"));
@@ -117,7 +119,8 @@ char* message_to_json(const Message* msg) {
             msg->event_type == PACKET_RECEIVE_EVENT ? "PACKET_RECEIVE_EVENT" :
             msg->event_type == TIMEOUT_EVENT ? "TIMEOUT_EVENT" :
             msg->event_type == CONNECT_REQUEST_EVENT ? "CONNECT_REQUEST_EVENT" :
-            msg->event_type == CONNECTION_ESTABLISHED_EVENT ? "CONNECTION_ESTABLISHED_EVENT" : "UNKNOWN"
+            msg->event_type == CONNECTION_ESTABLISHED_EVENT ? "CONNECTION_ESTABLISHED_EVENT" :
+            msg->event_type == LISTEN_EVENT ? "LISTEN_EVENT" : "UNKNOWN"
         ));
     }
 
@@ -163,6 +166,7 @@ void json_to_message(const char* json_str, Message* msg) {
         else if (event_type_str && strcmp(event_type_str, "TIMEOUT_EVENT") == 0) msg->event_type = TIMEOUT_EVENT;
         else if (event_type_str && strcmp(event_type_str, "CONNECT_REQUEST_EVENT") == 0) msg->event_type = CONNECT_REQUEST_EVENT;
         else if (event_type_str && strcmp(event_type_str, "CONNECTION_ESTABLISHED_EVENT") == 0) msg->event_type = CONNECTION_ESTABLISHED_EVENT;
+        else if (event_type_str && strcmp(event_type_str, "LISTEN_EVENT") == 0) msg->event_type = LISTEN_EVENT;
         else msg->event_type = -1; // Unknown
     }
 

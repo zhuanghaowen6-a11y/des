@@ -38,6 +38,8 @@ typedef struct {
     char initial_register_request_id[64]; // 存储初始注册ROUTER_START事件的请求ID
     int pending_packets_count; // 记录有多少个数据包已经在虚拟时间上到达但未被读取
     int pending_connections_count; // 记录有多少个连接已经在虚拟时间上建立但未被accept
+    int is_listening; // 标记路由器是否已经调用过 listen()
+    char listen_address[256]; // 记录路由器监听的地址
     // 不再有数据缓冲区，因为数据直接在路由器之间传输
 } RouterInfo;
 
@@ -70,6 +72,7 @@ void handle_event(Event event);
 
 // Event Handlers
 void handle_router_start(Event event);
+void handle_listen_event(Event event);
 void handle_connect_request_event(Event event);
 void handle_connection_established_event(Event event);
 void handle_router_block_request(Event event);
@@ -191,9 +194,11 @@ void init_desd() {
         router_states[i].comm_socket_fd = -1;
         router_states[i].pending_packets_count = 0;
         router_states[i].pending_connections_count = 0;
+        router_states[i].is_listening = 0;
         memset(router_states[i].blocked_on_request_id, 0, sizeof(router_states[i].blocked_on_request_id));
         memset(router_states[i].blocked_on_function, 0, sizeof(router_states[i].blocked_on_function));
         memset(router_states[i].initial_register_request_id, 0, sizeof(router_states[i].initial_register_request_id));
+        memset(router_states[i].listen_address, 0, sizeof(router_states[i].listen_address));
     }
     for (int i = 0; i < MAX_ACTIVE_EVENTS; ++i) {
         event_active_status[i] = 0; // inactive
@@ -402,6 +407,7 @@ const char* event_type_to_string(EventType type) {
         case TIMEOUT_EVENT: return "TIMEOUT_EVENT";
         case CONNECT_REQUEST_EVENT: return "CONNECT_REQUEST_EVENT";
         case CONNECTION_ESTABLISHED_EVENT: return "CONNECTION_ESTABLISHED_EVENT";
+        case LISTEN_EVENT: return "LISTEN_EVENT";
         default: return "UNKNOWN_EVENT";
     }
 }
@@ -442,10 +448,42 @@ void desd_event_loop() {
 
         if (is_router_running_after_event) {
             printf("[DESD] R%d is now RUNNING. Waiting for its next event...\n", current_event.router_id);
-            Message next_msg_from_router;
-            int received_ok = receive_blocking_from_router(current_event.router_id, &next_msg_from_router);
+            
+            // 循环接收路由器的事件，直到收到一个需要放入队列的事件
+            while (1) {
+                Message next_msg_from_router;
+                int received_ok = receive_blocking_from_router(current_event.router_id, &next_msg_from_router);
 
-            if (received_ok && next_msg_from_router.message_type == HOOK_TO_DESD) {
+                if (!received_ok) {
+                    fprintf(stderr, "[DESD ERROR] R%d failed to respond with next event after unblock.\n", current_event.router_id);
+                    break;
+                }
+
+                if (next_msg_from_router.message_type != HOOK_TO_DESD) {
+                    fprintf(stderr, "[DESD ERROR] R%d sent a non-HOOK_TO_DESD message after unblock: Type %d.\n",
+                            current_event.router_id, next_msg_from_router.message_type);
+                    break;
+                }
+
+                // 检查是否是需要立即处理的瞬时事件（如 LISTEN_EVENT）
+                if (next_msg_from_router.event_type == LISTEN_EVENT) {
+                    // 立即处理 LISTEN_EVENT，不放入事件队列
+                    Event listen_event = {
+                        .timestamp = current_virtual_time,
+                        .router_id = next_msg_from_router.router_id,
+                        .event_type = LISTEN_EVENT,
+                        .event_id = generate_event_id(),
+                        .payload = next_msg_from_router.payload
+                    };
+                    listen_event.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+                    printf("[DESD] R%d sent LISTEN_EVENT (ReqID: %s), processing immediately at VT %.3f.\n",
+                           current_event.router_id, next_msg_from_router.request_id, current_virtual_time);
+                    handle_listen_event(listen_event);
+                    // 继续循环，等待下一个事件
+                    continue;
+                }
+
+                // 其他事件放入队列
                 Event next_event = {
                     .timestamp = current_virtual_time, // 路由器被唤醒后，其操作被认为是瞬时的，所以事件时间戳为当前虚拟时间
                     .router_id = next_msg_from_router.router_id,
@@ -458,12 +496,7 @@ void desd_event_loop() {
                 printf("[DESD] R%d generated event %s (ReqID: %s) at VT %.3f (EventID: %lu).\n",
                        current_event.router_id, event_type_to_string(next_event.event_type),
                        next_msg_from_router.request_id, current_virtual_time, next_event.event_id);
-            } else if (received_ok) {
-                 fprintf(stderr, "[DESD ERROR] R%d sent a non-HOOK_TO_DESD message after unblock: Type %d.\n",
-                         current_event.router_id, next_msg_from_router.message_type);
-            } else {
-                fprintf(stderr, "[DESD ERROR] R%d failed to respond with next event after unblock.\n", current_event.router_id);
-                // Handle router disconnection or unresponsive behavior
+                break;
             }
         }
         // pthread_mutex_unlock(&desd_state_mutex); // Unlock desd_state_mutex
@@ -475,6 +508,9 @@ void handle_event(Event event) {
     switch (event.event_type) {
         case ROUTER_START:
             handle_router_start(event);
+            break;
+        case LISTEN_EVENT:
+            handle_listen_event(event);
             break;
         case CONNECT_REQUEST_EVENT:
             handle_connect_request_event(event);
@@ -508,6 +544,52 @@ void handle_router_start(Event event) {
         
         // 使用存储的初始注册请求ID来作为响应ID
         send_success_response(event.router_id, router_states[event.router_id].initial_register_request_id, "REGISTER", "Registered", NULL);
+    }
+}
+
+void handle_listen_event(Event event) {
+    int router_id = event.router_id;
+    json_error_t error;
+    json_t *payload_obj = json_loads(event.payload.json_str, 0, &error);
+    if (!payload_obj) {
+        fprintf(stderr, "[DESD ERROR] handle_listen_event: Failed to parse payload JSON.\n");
+        return;
+    }
+
+    const char *req_id_ptr = json_string_value(json_object_get(payload_obj, "request_id"));
+    if (req_id_ptr == NULL) {
+        fprintf(stderr, "[DESD ERROR] handle_listen_event: 'request_id' missing or not a string.\n");
+        json_decref(payload_obj);
+        return;
+    }
+    char request_id[64];
+    strncpy(request_id, req_id_ptr, 63);
+    request_id[63] = '\0';
+
+    const char *listen_addr_ptr = json_string_value(json_object_get(payload_obj, "listen_address"));
+    if (listen_addr_ptr == NULL) {
+        fprintf(stderr, "[DESD ERROR] handle_listen_event: 'listen_address' missing or not a string.\n");
+        json_decref(payload_obj);
+        return;
+    }
+    
+    // 复制地址到本地缓冲区，防止 json_decref 后访问无效内存
+    char listen_address_local[256];
+    strncpy(listen_address_local, listen_addr_ptr, sizeof(listen_address_local) - 1);
+    listen_address_local[sizeof(listen_address_local) - 1] = '\0';
+    
+    json_decref(payload_obj);
+
+    if (router_id > 0 && router_id <= MAX_ROUTERS) {
+        // 记录路由器已经开始监听
+        router_states[router_id].is_listening = 1;
+        strncpy(router_states[router_id].listen_address, listen_address_local, sizeof(router_states[router_id].listen_address) - 1);
+        router_states[router_id].listen_address[sizeof(router_states[router_id].listen_address) - 1] = '\0';
+        
+        printf("[DESD] R%d is now listening on %s.\n", router_id, router_states[router_id].listen_address);
+        
+        // listen() 是非阻塞的，立即返回成功
+        send_success_response(router_id, request_id, "LISTEN", "Listen Successful", NULL);
     }
 }
 
@@ -563,6 +645,19 @@ void handle_connect_request_event(Event event) {
         }
 
         if (target_router_id != -1) {
+            // 检查目标路由器是否已经调用过 listen()
+            if (!router_states[target_router_id].is_listening ||
+                strcmp(router_states[target_router_id].listen_address, destination_abstract_address_local) != 0) {
+                // 目标路由器没有 listen，连接失败
+                fprintf(stderr, "[DESD ERROR] R%d attempted to connect to %s, but R%d is not listening on that address.\n",
+                        router_id, destination_abstract_address_local, target_router_id);
+                send_error_response(router_id, request_id, "Connection refused: Target not listening");
+                router_states[router_id].status = RUNNING; // 错误发生，解除阻塞
+                memset(router_states[router_id].blocked_on_request_id, 0, sizeof(router_states[router_id].blocked_on_request_id));
+                memset(router_states[router_id].blocked_on_function, 0, sizeof(router_states[router_id].blocked_on_function));
+                return;
+            }
+            
             json_t *target_payload_obj = json_object();
             char client_router_id_buffer[16]; // Buffer for router_id string
             snprintf(client_router_id_buffer, sizeof(client_router_id_buffer), "%d", router_id);
