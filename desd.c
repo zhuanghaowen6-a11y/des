@@ -57,8 +57,8 @@ typedef struct {
     char initial_register_request_id[64]; // 存储初始注册ROUTER_START事件的请求ID
     int pending_packets_count; // 记录有多少个数据包已经在虚拟时间上到达但未被读取
     int pending_connections_count; // 记录有多少个连接已经在虚拟时间上建立但未被accept
-    int is_listening; // 标记路由器是否已经调用过 listen()
-    char listen_address[256]; // 记录路由器监听的地址
+    int listen_count; // 监听地址数量
+    char listen_addresses[10][256]; // 支持最多 10 个监听地址
     ConnectionInfo connections[MAX_CONNECTIONS_PER_ROUTER]; // 连接表
     unsigned long pending_timeout_event_id; // 记录正在等待的超时事件ID（用于取消）
     PacketBuffer packet_buffers[MAX_PENDING_PACKETS]; // 数据包缓冲区
@@ -224,12 +224,14 @@ void init_desd() {
         router_states[i].comm_socket_fd = -1;
         router_states[i].pending_packets_count = 0;
         router_states[i].pending_connections_count = 0;
-        router_states[i].is_listening = 0;
+        router_states[i].listen_count = 0;
         router_states[i].pending_timeout_event_id = 0;
         memset(router_states[i].blocked_on_request_id, 0, sizeof(router_states[i].blocked_on_request_id));
         memset(router_states[i].blocked_on_function, 0, sizeof(router_states[i].blocked_on_function));
         memset(router_states[i].initial_register_request_id, 0, sizeof(router_states[i].initial_register_request_id));
-        memset(router_states[i].listen_address, 0, sizeof(router_states[i].listen_address));
+        for (int j = 0; j < 10; j++) {
+            memset(router_states[i].listen_addresses[j], 0, sizeof(router_states[i].listen_addresses[j]));
+        }
         
         // 初始化连接表
         for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; ++j) {
@@ -272,12 +274,14 @@ void cleanup_desd() {
 // 根据监听地址查找路由器ID
 int find_router_by_listen_address(const char *address) {
     for (int i = 1; i <= MAX_ROUTERS; i++) {
-        if (router_states[i].is_listening &&
-            strcmp(router_states[i].listen_address, address) == 0) {
-            return i;
+        // 遍历该路由器的所有监听地址
+        for (int j = 0; j < router_states[i].listen_count; j++) {
+            if (strcmp(router_states[i].listen_addresses[j], address) == 0) {
+                return i;  // 找到匹配的路由器
+            }
         }
     }
-    return -1;
+    return -1;  // 未找到
 }
 
 // 记录连接映射
@@ -721,12 +725,33 @@ void handle_listen_event(Event event) {
     json_decref(payload_obj);
 
     if (router_id > 0 && router_id <= MAX_ROUTERS) {
-        // 记录路由器已经开始监听
-        router_states[router_id].is_listening = 1;
-        strncpy(router_states[router_id].listen_address, listen_address_local, sizeof(router_states[router_id].listen_address) - 1);
-        router_states[router_id].listen_address[sizeof(router_states[router_id].listen_address) - 1] = '\0';
+        // 检查是否已达到监听地址上限
+        if (router_states[router_id].listen_count >= 10) {
+            fprintf(stderr, "[DESD ERROR] R%d listen address limit reached (max: 10)!\n", router_id);
+            send_error_response(router_id, request_id, "Too many listen addresses");
+            return;
+        }
         
-        printf("[DESD] R%d is now listening on %s.\n", router_id, router_states[router_id].listen_address);
+        // 检查是否已存在该地址（避免重复）
+        for (int i = 0; i < router_states[router_id].listen_count; i++) {
+            if (strcmp(router_states[router_id].listen_addresses[i], listen_address_local) == 0) {
+                printf("[DESD] R%d already listening on %s, ignoring duplicate.\n", 
+                       router_id, listen_address_local);
+                send_success_response(router_id, request_id, "LISTEN", "Already Listening", NULL);
+                return;
+            }
+        }
+        
+        // 添加新的监听地址
+        int index = router_states[router_id].listen_count;
+        strncpy(router_states[router_id].listen_addresses[index], listen_address_local, 255);
+        router_states[router_id].listen_addresses[index][255] = '\0';
+        router_states[router_id].listen_count++;
+        
+        printf("[DESD] R%d is now listening on %s (total: %d address%s).\n", 
+               router_id, listen_address_local, 
+               router_states[router_id].listen_count,
+               router_states[router_id].listen_count > 1 ? "es" : "");
         
         // listen() 是非阻塞的，立即返回成功
         send_success_response(router_id, request_id, "LISTEN", "Listen Successful", NULL);
