@@ -27,8 +27,9 @@ static int (*real_bind)(int, const struct sockaddr *, socklen_t) = NULL;
 static int (*real_listen)(int, int) = NULL;
 static int (*real_accept)(int, struct sockaddr *, socklen_t *) = NULL;
 static int (*real_unlink)(const char *) = NULL;
-// static int (*real_select)(int, fd_set *, fd_set *, fd_set *, struct timeval *) = NULL; // 不再使用select，改用poll
+static int (*real_select)(int, fd_set *, fd_set *, fd_set *, struct timeval *) = NULL;
 static int (*real_poll)(struct pollfd *, nfds_t, int) = NULL;
+static unsigned int (*real_sleep)(unsigned int) = NULL;
 
 void generate_request_id(char* id_buf); // Function prototype for generate_request_id
 
@@ -37,8 +38,9 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 ssize_t send(int sockfd, const void *buf, size_t len, int flags);
 ssize_t recv(int sockfd, void *buf, size_t len, int flags);
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
-// int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout); // 不再使用select
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+unsigned int sleep(unsigned int seconds);
 
 // Helper function to send message to desd and wait for response
 int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp_msg_out);
@@ -67,10 +69,12 @@ static void lib_init(void) {
     real_listen = dlsym(RTLD_NEXT, "listen");
     real_accept = dlsym(RTLD_NEXT, "accept");
     real_unlink = dlsym(RTLD_NEXT, "unlink");
-    real_poll = dlsym(RTLD_NEXT, "poll"); // 使用poll
+    real_select = dlsym(RTLD_NEXT, "select");
+    real_poll = dlsym(RTLD_NEXT, "poll");
+    real_sleep = dlsym(RTLD_NEXT, "sleep");
 
     if (!real_socket || !real_connect || !real_send || !real_recv || !real_close ||
-        !real_bind || !real_listen || !real_accept || !real_unlink || !real_poll) {
+        !real_bind || !real_listen || !real_accept || !real_unlink || !real_select || !real_poll || !real_sleep) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Error in dlsym: %s\n", dlerror());
         _exit(1);
     }
@@ -580,6 +584,93 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     }
 }
 
+// select - 用于支持带超时的I/O操作
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
+    if (desd_control_socket_fd == -1) {
+        return real_select(nfds, readfds, writefds, exceptfds, timeout);
+    }
+
+    // 计算超时时间（毫秒）
+    int timeout_ms = -1;  // -1 表示无限等待
+    if (timeout != NULL) {
+        timeout_ms = timeout->tv_sec * 1000 + timeout->tv_usec / 1000;
+    }
+    
+    printf("[LIBDESHOOK] R%d intercepted select() with timeout %d ms.\n", my_router_id, timeout_ms);
+
+    // 如果是非阻塞调用（timeout = 0），直接调用真实的select
+    if (timeout != NULL && timeout->tv_sec == 0 && timeout->tv_usec == 0) {
+        printf("[LIBDESHOOK] R%d select() is non-blocking, calling real select.\n", my_router_id);
+        return real_select(nfds, readfds, writefds, exceptfds, timeout);
+    }
+
+    // 否则，向desd注册阻塞请求（SELECT_CALL）
+    Message select_block_req;
+    memset(&select_block_req, 0, sizeof(Message));
+    select_block_req.message_type = HOOK_TO_DESD;
+    select_block_req.router_id = my_router_id;
+    select_block_req.event_type = ROUTER_BLOCK_REQUEST;
+    select_block_req.virtual_time = current_virtual_time;
+    generate_request_id(select_block_req.request_id);
+
+    json_t *payload_obj = json_object();
+    json_object_set_new(payload_obj, "blocked_function", json_string("SELECT_CALL"));
+    json_object_set_new(payload_obj, "request_id", json_string(select_block_req.request_id));
+    if (timeout_ms >= 0) {
+        json_object_set_new(payload_obj, "timeout_ms", json_integer(timeout_ms));
+    }
+    char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
+    strncpy(select_block_req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+    select_block_req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+    free(payload_str);
+    json_decref(payload_obj);
+
+    Message select_block_resp;
+    if (send_msg_to_desd_and_wait_for_response(&select_block_req, &select_block_resp)) {
+        json_error_t error;
+        json_t *resp_payload_obj = json_loads(select_block_resp.payload.json_str, 0, &error);
+        
+        json_t *status_json = NULL;
+        if (resp_payload_obj) {
+            status_json = json_object_get(resp_payload_obj, "status");
+        }
+        
+        if (status_json && json_is_string(status_json) &&
+            strcmp(json_string_value(status_json), "SUCCESS") == 0) {
+            
+            printf("[LIBDESHOOK] R%d select() unblocked by DESD. Now performing real select.\n", my_router_id);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+
+            // DESD解除阻塞后，调用真实的select（非阻塞检查，应该有数据就绪）
+            struct timeval tv_zero = {0, 0};
+            return real_select(nfds, readfds, writefds, exceptfds, &tv_zero);
+
+        } else if (status_json && json_is_string(status_json) &&
+                   strcmp(json_string_value(status_json), "TIMEOUT") == 0) {
+            printf("[LIBDESHOOK] R%d select() timed out (DESD confirmed).\n", my_router_id);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+            return 0; // select timeout returns 0
+        } else {
+            const char* error_message = "Unknown error";
+            json_t *error_msg_json = NULL;
+            if (resp_payload_obj) {
+                error_msg_json = json_object_get(resp_payload_obj, "error_message");
+                if (error_msg_json && json_is_string(error_msg_json)) {
+                    error_message = json_string_value(error_msg_json);
+                }
+            }
+            fprintf(stderr, "[LIBDESHOOK ERROR] R%d select() failed (DESD rejected or error): %s.\n", my_router_id, error_message);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+            errno = EIO;
+            return -1;
+        }
+    } else {
+        fprintf(stderr, "[LIBDESHOOK ERROR] R%d select() failed: No response from desd.\n", my_router_id);
+        errno = EIO;
+        return -1;
+    }
+}
+
 // close - 简单拦截，不与DESD交互
 int close(int sockfd) {
     printf("[LIBDESHOOK] R%d intercepted close() for sockfd %d.\n", my_router_id, sockfd);
@@ -676,4 +767,58 @@ int socket(int domain, int type, int protocol) {
     int fd = real_socket(domain, type, protocol);
     printf("[LIBDESHOOK] R%d intercepted socket() call. Created fd: %d.\n", my_router_id, fd);
     return fd;
+}
+
+// sleep - 基于虚拟时间的睡眠
+unsigned int sleep(unsigned int seconds) {
+    if (desd_control_socket_fd == -1) {
+        return real_sleep(seconds);
+    }
+
+    printf("[LIBDESHOOK] R%d intercepted sleep(%u seconds).\n", my_router_id, seconds);
+
+    // 向desd注册阻塞请求（SLEEP_CALL）
+    Message sleep_block_req;
+    memset(&sleep_block_req, 0, sizeof(Message));
+    sleep_block_req.message_type = HOOK_TO_DESD;
+    sleep_block_req.router_id = my_router_id;
+    sleep_block_req.event_type = ROUTER_BLOCK_REQUEST;
+    sleep_block_req.virtual_time = current_virtual_time;
+    generate_request_id(sleep_block_req.request_id);
+
+    json_t *payload_obj = json_object();
+    json_object_set_new(payload_obj, "blocked_function", json_string("SLEEP_CALL"));
+    json_object_set_new(payload_obj, "request_id", json_string(sleep_block_req.request_id));
+    json_object_set_new(payload_obj, "sleep_seconds", json_integer(seconds));
+    char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
+    strncpy(sleep_block_req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+    sleep_block_req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+    free(payload_str);
+    json_decref(payload_obj);
+
+    Message sleep_block_resp;
+    if (send_msg_to_desd_and_wait_for_response(&sleep_block_req, &sleep_block_resp)) {
+        json_error_t error;
+        json_t *resp_payload_obj = json_loads(sleep_block_resp.payload.json_str, 0, &error);
+        
+        json_t *status_json = NULL;
+        if (resp_payload_obj) {
+            status_json = json_object_get(resp_payload_obj, "status");
+        }
+        
+        if (status_json && json_is_string(status_json) &&
+            strcmp(json_string_value(status_json), "SUCCESS") == 0) {
+            
+            printf("[LIBDESHOOK] R%d sleep() completed (virtual time advanced by %u seconds).\n", my_router_id, seconds);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+            return 0;  // 成功睡眠
+        } else {
+            fprintf(stderr, "[LIBDESHOOK ERROR] R%d sleep() failed (DESD rejected or error).\n", my_router_id);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+            return seconds;  // 返回未睡眠的秒数
+        }
+    } else {
+        fprintf(stderr, "[LIBDESHOOK ERROR] R%d sleep() failed: No response from desd.\n", my_router_id);
+        return seconds;
+    }
 }

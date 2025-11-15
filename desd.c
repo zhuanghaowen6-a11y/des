@@ -50,6 +50,7 @@ typedef struct {
     int is_listening; // 标记路由器是否已经调用过 listen()
     char listen_address[256]; // 记录路由器监听的地址
     ConnectionInfo connections[MAX_CONNECTIONS_PER_ROUTER]; // 连接表
+    unsigned long pending_timeout_event_id; // 记录正在等待的超时事件ID（用于取消）
     // 不再有数据缓冲区，因为数据直接在路由器之间传输
 } RouterInfo;
 
@@ -211,6 +212,7 @@ void init_desd() {
         router_states[i].pending_packets_count = 0;
         router_states[i].pending_connections_count = 0;
         router_states[i].is_listening = 0;
+        router_states[i].pending_timeout_event_id = 0;
         memset(router_states[i].blocked_on_request_id, 0, sizeof(router_states[i].blocked_on_request_id));
         memset(router_states[i].blocked_on_function, 0, sizeof(router_states[i].blocked_on_function));
         memset(router_states[i].initial_register_request_id, 0, sizeof(router_states[i].initial_register_request_id));
@@ -761,10 +763,11 @@ void handle_connect_request_event(Event event) {
         free(target_payload_str);
         push_event(conn_est_event);
         
-        printf("[DESD] R%d sent CONNECT_REQUEST (fd:%d). Scheduled CONNECTION_ESTABLISHED_EVENT for R%d at VT=%.3f.\n",
-               router_id, client_socket_fd, target_router_id, connection_established_time);
+        printf("[DESD] R%d sent CONNECT_REQUEST (fd:%d). Scheduled CONNECTION_ESTABLISHED_EVENT for R%d (server) at VT=%.3f and R%d (client) at VT=%.3f.\n",
+               router_id, client_socket_fd, target_router_id, connection_established_time, router_id, connection_established_time - 0.001);
 
         // 同时为发起连接的客户端路由器调度一个CONNECTION_ESTABLISHED_EVENT
+        // 重要：客户端事件略早于服务器事件，确保 real_connect() 先于 real_accept() 执行
         json_t *source_payload_obj = json_object();
         json_object_set_new(source_payload_obj, "client_router_id", json_integer(router_id));
         json_object_set_new(source_payload_obj, "server_router_id", json_integer(target_router_id));
@@ -774,7 +777,7 @@ void handle_connect_request_event(Event event) {
         json_decref(source_payload_obj);
 
         Event source_conn_est_event = {
-            .timestamp = connection_established_time,
+            .timestamp = connection_established_time - 0.001, // 客户端事件早 1ms，确保先执行
             .router_id = router_id, // 发起连接的路由器
             .event_type = CONNECTION_ESTABLISHED_EVENT,
             .event_id = generate_event_id()
@@ -972,8 +975,104 @@ void handle_router_block_request(Event event) {
                 printf("[DESD] R%d blocked on %s (ReqID: %s) - no pending connections.\n",
                        router_id, blocked_func_str_local, request_id_local);
             }
+        } else if (strcmp(blocked_func_str_local, "SELECT_CALL") == 0) {
+            // 处理 SELECT_CALL：检查是否有超时参数
+            json_error_t error2;
+            json_t *payload_obj2 = json_loads(event.payload.json_str, 0, &error2);
+            int timeout_ms = -1;
+            if (payload_obj2) {
+                timeout_ms = json_integer_value(json_object_get(payload_obj2, "timeout_ms"));
+                json_decref(payload_obj2);
+            }
+            
+            // 先检查是否有 pending 数据包（数据已到达）
+            if (router_states[router_id].pending_packets_count > 0) {
+                // 数据已就绪，立即唤醒
+                router_states[router_id].pending_packets_count--;
+                router_states[router_id].status = RUNNING;
+                send_success_response(router_id, request_id_local, "SELECT", "Data Available", NULL);
+                printf("[DESD] R%d select() immediately unblocked (had %d pending packet(s)).\n", 
+                       router_id, router_states[router_id].pending_packets_count + 1);
+            } else {
+                // 数据未就绪，阻塞并可能注册超时事件
+                router_states[router_id].status = BLOCKED;
+                strncpy(router_states[router_id].blocked_on_request_id, request_id_local, 63);
+                router_states[router_id].blocked_on_request_id[63] = '\0';
+                strncpy(router_states[router_id].blocked_on_function, blocked_func_str_local, 63);
+                router_states[router_id].blocked_on_function[63] = '\0';
+                
+                if (timeout_ms > 0) {
+                    // 注册超时事件
+                    double timeout_seconds = timeout_ms / 1000.0;
+                    double timeout_time = current_virtual_time + timeout_seconds;
+                    
+                    Event timeout_event = {
+                        .timestamp = timeout_time,
+                        .router_id = router_id,
+                        .event_type = TIMEOUT_EVENT,
+                        .event_id = generate_event_id()
+                    };
+                    
+                    json_t *timeout_payload_obj = json_object();
+                    json_object_set_new(timeout_payload_obj, "original_block_request_id", json_string(request_id_local));
+                    json_object_set_new(timeout_payload_obj, "timeout_type", json_string("SELECT_CALL"));
+                    char *timeout_payload_str = json_dumps(timeout_payload_obj, JSON_COMPACT);
+                    strncpy(timeout_event.payload.json_str, timeout_payload_str, MAX_MSG_SIZE - 1);
+                    timeout_event.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+                    free(timeout_payload_str);
+                    json_decref(timeout_payload_obj);
+                    
+                    push_event(timeout_event);
+                    router_states[router_id].pending_timeout_event_id = timeout_event.event_id;
+                    
+                    printf("[DESD] R%d blocked on %s (ReqID: %s) with %dms timeout. Registered TIMEOUT_EVENT (ID: %lu) at VT=%.3f.\n",
+                           router_id, blocked_func_str_local, request_id_local, timeout_ms, timeout_event.event_id, timeout_time);
+                } else {
+                    printf("[DESD] R%d blocked on %s (ReqID: %s) - no timeout.\n",
+                           router_id, blocked_func_str_local, request_id_local);
+                }
+            }
+        } else if (strcmp(blocked_func_str_local, "SLEEP_CALL") == 0) {
+            // 处理 SLEEP_CALL：直接注册一个唤醒事件
+            json_error_t error2;
+            json_t *payload_obj2 = json_loads(event.payload.json_str, 0, &error2);
+            int sleep_seconds = 0;
+            if (payload_obj2) {
+                sleep_seconds = json_integer_value(json_object_get(payload_obj2, "sleep_seconds"));
+                json_decref(payload_obj2);
+            }
+            
+            router_states[router_id].status = BLOCKED;
+            strncpy(router_states[router_id].blocked_on_request_id, request_id_local, 63);
+            router_states[router_id].blocked_on_request_id[63] = '\0';
+            strncpy(router_states[router_id].blocked_on_function, blocked_func_str_local, 63);
+            router_states[router_id].blocked_on_function[63] = '\0';
+            
+            // 注册唤醒事件（类似超时事件）
+            double wakeup_time = current_virtual_time + sleep_seconds;
+            
+            Event wakeup_event = {
+                .timestamp = wakeup_time,
+                .router_id = router_id,
+                .event_type = TIMEOUT_EVENT,  // 复用 TIMEOUT_EVENT
+                .event_id = generate_event_id()
+            };
+            
+            json_t *wakeup_payload_obj = json_object();
+            json_object_set_new(wakeup_payload_obj, "original_block_request_id", json_string(request_id_local));
+            json_object_set_new(wakeup_payload_obj, "timeout_type", json_string("SLEEP_CALL"));
+            char *wakeup_payload_str = json_dumps(wakeup_payload_obj, JSON_COMPACT);
+            strncpy(wakeup_event.payload.json_str, wakeup_payload_str, MAX_MSG_SIZE - 1);
+            wakeup_event.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+            free(wakeup_payload_str);
+            json_decref(wakeup_payload_obj);
+            
+            push_event(wakeup_event);
+            
+            printf("[DESD] R%d blocked on %s (ReqID: %s) for %d seconds. Registered wakeup event (ID: %lu) at VT=%.3f.\n",
+                   router_id, blocked_func_str_local, request_id_local, sleep_seconds, wakeup_event.event_id, wakeup_time);
         } else {
-            // 其他类型的阻塞请求（SELECT等）
+            // 其他类型的阻塞请求
             router_states[router_id].status = BLOCKED;
             strncpy(router_states[router_id].blocked_on_request_id, request_id_local, 63);
             router_states[router_id].blocked_on_request_id[63] = '\0';
@@ -1077,23 +1176,51 @@ void handle_packet_receive_event(Event event) {
                target_router_id, destination_abstract_address);
 
         if (router_states[target_router_id].status == BLOCKED &&
-            router_states[target_router_id].blocked_on_request_id[0] != '\0' &&
-            strcmp(router_states[target_router_id].blocked_on_function, "RECV_CALL") == 0) { 
-            // 情况1：接收方已经在 recv 上等待，立即唤醒
-            char request_id[64];
-            strncpy(request_id, router_states[target_router_id].blocked_on_request_id, 63);
-            request_id[63] = '\0';
+            router_states[target_router_id].blocked_on_request_id[0] != '\0') {
+            
+            const char *blocked_func = router_states[target_router_id].blocked_on_function;
+            
+            if (strcmp(blocked_func, "RECV_CALL") == 0) {
+                // 情况1a：接收方已经在 recv 上等待，立即唤醒
+                char request_id[64];
+                strncpy(request_id, router_states[target_router_id].blocked_on_request_id, 63);
+                request_id[63] = '\0';
 
-            router_states[target_router_id].status = RUNNING;
-            memset(router_states[target_router_id].blocked_on_request_id, 0, sizeof(router_states[target_router_id].blocked_on_request_id));
-            memset(router_states[target_router_id].blocked_on_function, 0, sizeof(router_states[target_router_id].blocked_on_function));
-            // desd不再发送数据，只通知libdeshook数据已可读
-            send_success_response(target_router_id, request_id, "RECV", "Packet Available", NULL); // 通知接收方数据已到达
-            printf("[DESD] R%d was blocked on recv and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, destination_abstract_address);
+                router_states[target_router_id].status = RUNNING;
+                memset(router_states[target_router_id].blocked_on_request_id, 0, sizeof(router_states[target_router_id].blocked_on_request_id));
+                memset(router_states[target_router_id].blocked_on_function, 0, sizeof(router_states[target_router_id].blocked_on_function));
+                // desd不再发送数据，只通知libdeshook数据已可读
+                send_success_response(target_router_id, request_id, "RECV", "Packet Available", NULL); // 通知接收方数据已到达
+                printf("[DESD] R%d was blocked on recv and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, destination_abstract_address);
+            } else if (strcmp(blocked_func, "SELECT_CALL") == 0) {
+                // 情况1b：接收方在 select 上等待，取消超时事件并唤醒
+                char request_id[64];
+                strncpy(request_id, router_states[target_router_id].blocked_on_request_id, 63);
+                request_id[63] = '\0';
+                
+                // 取消超时事件
+                if (router_states[target_router_id].pending_timeout_event_id > 0) {
+                    cancel_event(router_states[target_router_id].pending_timeout_event_id);
+                    printf("[DESD] Canceled timeout event %lu for R%d (data arrived before timeout).\n",
+                           router_states[target_router_id].pending_timeout_event_id, target_router_id);
+                    router_states[target_router_id].pending_timeout_event_id = 0;
+                }
+
+                router_states[target_router_id].status = RUNNING;
+                memset(router_states[target_router_id].blocked_on_request_id, 0, sizeof(router_states[target_router_id].blocked_on_request_id));
+                memset(router_states[target_router_id].blocked_on_function, 0, sizeof(router_states[target_router_id].blocked_on_function));
+                send_success_response(target_router_id, request_id, "SELECT", "Data Available", NULL);
+                printf("[DESD] R%d was blocked on select and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, destination_abstract_address);
+            } else {
+                // 其他阻塞类型，记录为 pending
+                router_states[target_router_id].pending_packets_count++;
+                printf("[DESD] R%d has %d pending packet(s) (data arrived but currently blocked on %s).\n", 
+                       target_router_id, router_states[target_router_id].pending_packets_count, blocked_func);
+            }
         } else {
-            // 情况2：接收方还没调用recv()（可能在等待accept或其他操作），记录数据已到达
+            // 情况2：接收方还没调用recv()或select()，记录数据已到达
             router_states[target_router_id].pending_packets_count++;
-            printf("[DESD] R%d has %d pending packet(s) (data arrived but recv not called yet, currently %s).\n", 
+            printf("[DESD] R%d has %d pending packet(s) (data arrived but recv/select not called yet, currently %s).\n", 
                    target_router_id, router_states[target_router_id].pending_packets_count,
                    router_states[target_router_id].status == BLOCKED ? router_states[target_router_id].blocked_on_function : "not blocked");
         }
@@ -1119,11 +1246,23 @@ void handle_timeout_event(Event event) {
         router_states[router_id].status = RUNNING;
         memset(router_states[router_id].blocked_on_request_id, 0, sizeof(router_states[router_id].blocked_on_request_id));
         memset(router_states[router_id].blocked_on_function, 0, sizeof(router_states[router_id].blocked_on_function));
-        send_timeout_response(router_id, original_block_request_id, timeout_type);
-        printf("[DESD] R%d timed out for request %s (Type: %s).\n", router_id, original_block_request_id, timeout_type);
+        
+        // 清除超时事件ID
+        if (router_states[router_id].pending_timeout_event_id == event.event_id) {
+            router_states[router_id].pending_timeout_event_id = 0;
+        }
+        
+        // 对于 SLEEP_CALL，发送 SUCCESS 响应；对于其他超时，发送 TIMEOUT 响应
+        if (timeout_type && strcmp(timeout_type, "SLEEP_CALL") == 0) {
+            send_success_response(router_id, original_block_request_id, "SLEEP", "Sleep Completed", NULL);
+            printf("[DESD] R%d sleep completed for request %s at VT=%.3f.\n", router_id, original_block_request_id, current_virtual_time);
+        } else {
+            send_timeout_response(router_id, original_block_request_id, timeout_type);
+            printf("[DESD] R%d timed out for request %s (Type: %s) at VT=%.3f.\n", router_id, original_block_request_id, timeout_type ? timeout_type : "UNKNOWN", current_virtual_time);
+        }
     } else {
         printf("[DESD] TIMEOUT_EVENT %lu for R%d ignored (router not blocked on this request %s anymore or already handled).\n",
-               event.event_id, router_id, original_block_request_id);
+               event.event_id, router_id, original_block_request_id ? original_block_request_id : "UNKNOWN");
     }
 }
 
