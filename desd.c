@@ -23,7 +23,7 @@ int event_queue_size = 0;
 
 // Active Events (for quick lookup and cancellation)
 // 现在不再保存实际事件的指针，因为事件是值传递的。用于标记事件是否已被取消。
-#define MAX_ACTIVE_EVENTS 100
+#define MAX_ACTIVE_EVENTS 100000  // 增大到100000，足够应对长时间运行
 // Event* active_events[MAX_ACTIVE_EVENTS]; // 不再需要，因为不再存储事件引用
 int event_active_status[MAX_ACTIVE_EVENTS]; // 0: inactive, 1: active (简化)
 
