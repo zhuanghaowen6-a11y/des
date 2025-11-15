@@ -38,6 +38,16 @@ typedef struct {
     int is_active;          // 连接是否活跃
 } ConnectionInfo;
 
+// 数据包缓冲区（用于暂存发送的数据，直到虚拟时间到达）
+#define MAX_PENDING_PACKETS 100
+#define MAX_PACKET_SIZE 8192
+
+typedef struct {
+    char data[MAX_PACKET_SIZE];  // 数据内容（hex编码）
+    size_t data_len;             // 数据长度
+    int is_used;                 // 是否被使用
+} PacketBuffer;
+
 typedef struct {
     int router_id;
     RouterStatus status;
@@ -51,7 +61,10 @@ typedef struct {
     char listen_address[256]; // 记录路由器监听的地址
     ConnectionInfo connections[MAX_CONNECTIONS_PER_ROUTER]; // 连接表
     unsigned long pending_timeout_event_id; // 记录正在等待的超时事件ID（用于取消）
-    // 不再有数据缓冲区，因为数据直接在路由器之间传输
+    PacketBuffer packet_buffers[MAX_PENDING_PACKETS]; // 数据包缓冲区
+    int pending_buffer_indices[MAX_PENDING_PACKETS]; // pending packet 的 buffer_index 队列
+    int pending_buffer_head; // 队列头
+    int pending_buffer_tail; // 队列尾
 } RouterInfo;
 
 RouterInfo router_states[MAX_ROUTERS + 1]; // router_id 从 1 开始
@@ -224,6 +237,16 @@ void init_desd() {
             router_states[i].connections[j].peer_router_id = -1;
             router_states[i].connections[j].is_active = 0;
         }
+        
+        // 初始化数据包缓冲区
+        for (int j = 0; j < MAX_PENDING_PACKETS; ++j) {
+            router_states[i].packet_buffers[j].is_used = 0;
+            router_states[i].packet_buffers[j].data_len = 0;
+            memset(router_states[i].packet_buffers[j].data, 0, MAX_PACKET_SIZE);
+            router_states[i].pending_buffer_indices[j] = -1;
+        }
+        router_states[i].pending_buffer_head = 0;
+        router_states[i].pending_buffer_tail = 0;
     }
     for (int i = 0; i < MAX_ACTIVE_EVENTS; ++i) {
         event_active_status[i] = 0; // inactive
@@ -511,16 +534,41 @@ void desd_event_loop() {
                event_type_to_string(current_event.event_type),
                current_event.router_id, current_virtual_time, current_event.event_id);
         
+        // 记录路由器在处理事件前的状态
+        // pthread_mutex_lock(&router_states_mutex);
+        RouterInfo *router_info = &router_states[current_event.router_id];
+        RouterStatus status_before_event = router_info->status;
+        // pthread_mutex_unlock(&router_states_mutex);
+        
         // 处理事件
         handle_event(current_event);
 
-        // 如果路由器被解除阻塞，等待其下一个事件
+        // 等待路由器下一个事件的条件：
+        // 1. 路由器刚启动 (IDLE → RUNNING)
+        // 2. 路由器被解除阻塞 (BLOCKED → RUNNING)
+        // 3. 处理了路由器主动发起的事件（PACKET_SEND_EVENT, CONNECT_REQUEST_EVENT, ROUTER_BLOCK_REQUEST）
+        //    这些事件是路由器发送给 desd 的，处理完后路由器会继续执行并发送下一个事件
+        // 不等待的情况：
+        // 4. 处理 desd 内部调度的事件（如 PACKET_RECEIVE_EVENT, TIMEOUT_EVENT, CONNECTION_ESTABLISHED_EVENT）
+        //    且路由器本来就在运行 (RUNNING → RUNNING)
         // pthread_mutex_lock(&router_states_mutex);
-        RouterInfo *router_info = &router_states[current_event.router_id];
-        int is_router_running_after_event = (router_info->status == RUNNING);
+        RouterStatus status_after_event = router_info->status;
+        
+        // 路由器主动发起的事件类型
+        int is_router_initiated_event = (
+            current_event.event_type == PACKET_SEND_EVENT ||
+            current_event.event_type == CONNECT_REQUEST_EVENT ||
+            current_event.event_type == ROUTER_BLOCK_REQUEST
+        );
+        
+        int should_wait_for_next_event = (
+            (status_before_event == IDLE && status_after_event == RUNNING) ||    // 路由器启动
+            (status_before_event == BLOCKED && status_after_event == RUNNING) || // 路由器解除阻塞
+            (is_router_initiated_event && status_after_event == RUNNING)         // 处理了路由器主动发起的事件
+        );
         // pthread_mutex_unlock(&router_states_mutex);
 
-        if (is_router_running_after_event) {
+        if (should_wait_for_next_event) {
             printf("[DESD] R%d is now RUNNING. Waiting for its next event...\n", current_event.router_id);
             
             // 循环接收路由器的事件，直到收到一个需要放入队列的事件
@@ -943,7 +991,42 @@ void handle_router_block_request(Event event) {
                 // 数据已在虚拟时间上到达，立即唤醒
                 router_states[router_id].pending_packets_count--;
                 router_states[router_id].status = RUNNING;
-                send_success_response(router_id, request_id_local, "RECV", "Packet Available", NULL);
+                
+                // 从队列中取出 buffer_index
+                int head = router_states[router_id].pending_buffer_head;
+                int buffer_index = router_states[router_id].pending_buffer_indices[head];
+                router_states[router_id].pending_buffer_head = (head + 1) % MAX_PENDING_PACKETS;
+                
+                // 发送数据给路由器
+                if (buffer_index >= 0 && buffer_index < MAX_PENDING_PACKETS &&
+                    router_states[router_id].packet_buffers[buffer_index].is_used) {
+                    
+                    json_t *resp_payload = json_object();
+                    json_object_set_new(resp_payload, "status", json_string("SUCCESS"));
+                    json_object_set_new(resp_payload, "blocked_function", json_string("RECV"));
+                    json_object_set_new(resp_payload, "message", json_string("Packet Available"));
+                    json_object_set_new(resp_payload, "packet_data", 
+                                      json_string(router_states[router_id].packet_buffers[buffer_index].data));
+                    
+                    char *payload_str = json_dumps(resp_payload, JSON_COMPACT);
+                    json_decref(resp_payload);
+                    
+                    Message response = {
+                        .message_type = DESD_TO_HOOK,
+                        .router_id = router_id,
+                        .virtual_time = current_virtual_time
+                    };
+                    strncpy(response.request_id, request_id_local, 63);
+                    response.request_id[63] = '\0';
+                    strncpy(response.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+                    response.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+                    free(payload_str);
+                    send_message_to_router(router_id, &response);
+                    
+                    // 释放缓冲区
+                    router_states[router_id].packet_buffers[buffer_index].is_used = 0;
+                }
+                
                 printf("[DESD] R%d recv() immediately unblocked (had %d pending packet(s)).\n", 
                        router_id, router_states[router_id].pending_packets_count + 1);
             } else {
@@ -988,11 +1071,12 @@ void handle_router_block_request(Event event) {
             // 先检查是否有 pending 数据包（数据已到达）
             if (router_states[router_id].pending_packets_count > 0) {
                 // 数据已就绪，立即唤醒
-                router_states[router_id].pending_packets_count--;
+                // 注意：不减少 pending_packets_count，因为数据还没有被 recv() 读取
+                // 只有 recv() 真正读取数据时才减少计数并取出 buffer_index
                 router_states[router_id].status = RUNNING;
                 send_success_response(router_id, request_id_local, "SELECT", "Data Available", NULL);
                 printf("[DESD] R%d select() immediately unblocked (had %d pending packet(s)).\n", 
-                       router_id, router_states[router_id].pending_packets_count + 1);
+                       router_id, router_states[router_id].pending_packets_count);
             } else {
                 // 数据未就绪，阻塞并可能注册超时事件
                 router_states[router_id].status = BLOCKED;
@@ -1094,15 +1178,21 @@ void handle_packet_send_event(Event event) {
     }
     const char *request_id_ptr = json_string_value(json_object_get(payload_obj, "request_id"));
     const char *destination_abstract_address_ptr = json_string_value(json_object_get(payload_obj, "destination_abstract_address"));
+    const char *packet_data_ptr = json_string_value(json_object_get(payload_obj, "packet_data"));
     
     // 复制到本地缓冲区，防止 json_decref 后访问无效内存
     char request_id[64] = {0};
     char destination_abstract_address[256] = {0};
+    char packet_data[MAX_PACKET_SIZE] = {0};
+    
     if (request_id_ptr) {
         strncpy(request_id, request_id_ptr, sizeof(request_id) - 1);
     }
     if (destination_abstract_address_ptr) {
         strncpy(destination_abstract_address, destination_abstract_address_ptr, sizeof(destination_abstract_address) - 1);
+    }
+    if (packet_data_ptr) {
+        strncpy(packet_data, packet_data_ptr, MAX_PACKET_SIZE - 1);
     }
     
     // 解析 socket_fd
@@ -1130,10 +1220,31 @@ void handle_packet_send_event(Event event) {
         return;
     }
 
+    // 将数据存储到目标路由器的缓冲区
+    int buffer_index = -1;
+    for (int i = 0; i < MAX_PENDING_PACKETS; i++) {
+        if (!router_states[target_router_id].packet_buffers[i].is_used) {
+            buffer_index = i;
+            break;
+        }
+    }
+    
+    if (buffer_index == -1) {
+        fprintf(stderr, "[DESD ERROR] R%d: No free packet buffer for R%d. Dropping packet.\n",
+                source_router_id, target_router_id);
+        send_error_response(source_router_id, request_id, "Packet buffer full");
+        return;
+    }
+    
+    // 缓冲数据
+    strncpy(router_states[target_router_id].packet_buffers[buffer_index].data, packet_data, MAX_PACKET_SIZE - 1);
+    router_states[target_router_id].packet_buffers[buffer_index].data_len = strlen(packet_data);
+    router_states[target_router_id].packet_buffers[buffer_index].is_used = 1;
+
     json_t *recv_payload_obj = json_object();
     json_object_set_new(recv_payload_obj, "source_router_id", json_integer(source_router_id));
     json_object_set_new(recv_payload_obj, "destination_abstract_address", json_string(destination_abstract_address));
-    // 不再传递packet_data_base64
+    json_object_set_new(recv_payload_obj, "buffer_index", json_integer(buffer_index));  // 传递缓冲区索引
     char *recv_payload_str = json_dumps(recv_payload_obj, JSON_COMPACT);
     json_decref(recv_payload_obj);
 
@@ -1162,6 +1273,7 @@ void handle_packet_receive_event(Event event) {
         return;
     }
     const char *destination_abstract_address_ptr = json_string_value(json_object_get(payload_obj, "destination_abstract_address"));
+    int buffer_index = json_integer_value(json_object_get(payload_obj, "buffer_index"));
     
     // 复制到本地缓冲区，防止 json_decref 后访问无效内存
     char destination_abstract_address[256] = {0};
@@ -1189,8 +1301,37 @@ void handle_packet_receive_event(Event event) {
                 router_states[target_router_id].status = RUNNING;
                 memset(router_states[target_router_id].blocked_on_request_id, 0, sizeof(router_states[target_router_id].blocked_on_request_id));
                 memset(router_states[target_router_id].blocked_on_function, 0, sizeof(router_states[target_router_id].blocked_on_function));
-                // desd不再发送数据，只通知libdeshook数据已可读
-                send_success_response(target_router_id, request_id, "RECV", "Packet Available", NULL); // 通知接收方数据已到达
+                
+                // 从缓冲区读取数据并发送给路由器
+                if (buffer_index >= 0 && buffer_index < MAX_PENDING_PACKETS &&
+                    router_states[target_router_id].packet_buffers[buffer_index].is_used) {
+                    
+                    json_t *resp_payload = json_object();
+                    json_object_set_new(resp_payload, "status", json_string("SUCCESS"));
+                    json_object_set_new(resp_payload, "blocked_function", json_string("RECV"));
+                    json_object_set_new(resp_payload, "message", json_string("Packet Available"));
+                    json_object_set_new(resp_payload, "packet_data", 
+                                      json_string(router_states[target_router_id].packet_buffers[buffer_index].data));
+                    
+                    char *payload_str = json_dumps(resp_payload, JSON_COMPACT);
+                    json_decref(resp_payload);
+                    
+                    Message response = {
+                        .message_type = DESD_TO_HOOK,
+                        .router_id = target_router_id,
+                        .virtual_time = current_virtual_time
+                    };
+                    strncpy(response.request_id, request_id, 63);
+                    response.request_id[63] = '\0';
+                    strncpy(response.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+                    response.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+                    free(payload_str);
+                    send_message_to_router(target_router_id, &response);
+                    
+                    // 释放缓冲区
+                    router_states[target_router_id].packet_buffers[buffer_index].is_used = 0;
+                }
+                
                 printf("[DESD] R%d was blocked on recv and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, destination_abstract_address);
             } else if (strcmp(blocked_func, "SELECT_CALL") == 0) {
                 // 情况1b：接收方在 select 上等待，取消超时事件并唤醒
@@ -1209,17 +1350,33 @@ void handle_packet_receive_event(Event event) {
                 router_states[target_router_id].status = RUNNING;
                 memset(router_states[target_router_id].blocked_on_request_id, 0, sizeof(router_states[target_router_id].blocked_on_request_id));
                 memset(router_states[target_router_id].blocked_on_function, 0, sizeof(router_states[target_router_id].blocked_on_function));
+                
+                // 将 buffer_index 加入 pending 队列，后续的 recv() 才能读取数据
+                router_states[target_router_id].pending_packets_count++;
+                int tail = router_states[target_router_id].pending_buffer_tail;
+                router_states[target_router_id].pending_buffer_indices[tail] = buffer_index;
+                router_states[target_router_id].pending_buffer_tail = (tail + 1) % MAX_PENDING_PACKETS;
+                
                 send_success_response(target_router_id, request_id, "SELECT", "Data Available", NULL);
-                printf("[DESD] R%d was blocked on select and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, destination_abstract_address);
+                printf("[DESD] R%d was blocked on select and now awakened by PACKET_RECEIVE_EVENT for %s (buffer_index=%d added to pending queue).\n", 
+                       target_router_id, destination_abstract_address, buffer_index);
             } else {
                 // 其他阻塞类型，记录为 pending
                 router_states[target_router_id].pending_packets_count++;
+                // 将 buffer_index 加入 pending 队列
+                int tail = router_states[target_router_id].pending_buffer_tail;
+                router_states[target_router_id].pending_buffer_indices[tail] = buffer_index;
+                router_states[target_router_id].pending_buffer_tail = (tail + 1) % MAX_PENDING_PACKETS;
                 printf("[DESD] R%d has %d pending packet(s) (data arrived but currently blocked on %s).\n", 
                        target_router_id, router_states[target_router_id].pending_packets_count, blocked_func);
             }
         } else {
             // 情况2：接收方还没调用recv()或select()，记录数据已到达
             router_states[target_router_id].pending_packets_count++;
+            // 将 buffer_index 加入 pending 队列
+            int tail = router_states[target_router_id].pending_buffer_tail;
+            router_states[target_router_id].pending_buffer_indices[tail] = buffer_index;
+            router_states[target_router_id].pending_buffer_tail = (tail + 1) % MAX_PENDING_PACKETS;
             printf("[DESD] R%d has %d pending packet(s) (data arrived but recv/select not called yet, currently %s).\n", 
                    target_router_id, router_states[target_router_id].pending_packets_count,
                    router_states[target_router_id].status == BLOCKED ? router_states[target_router_id].blocked_on_function : "not blocked");
@@ -1235,9 +1392,22 @@ void handle_timeout_event(Event event) {
         fprintf(stderr, "[DESD ERROR] handle_timeout_event: Failed to parse payload JSON.\n");
         return;
     }
-    const char *original_block_request_id = json_string_value(json_object_get(payload_obj, "original_block_request_id"));
-    const char *timeout_type = json_string_value(json_object_get(payload_obj, "timeout_type"));
-    json_decref(payload_obj);
+    
+    // 复制到本地缓冲区，防止 json_decref 后访问无效内存
+    const char *original_block_request_id_ptr = json_string_value(json_object_get(payload_obj, "original_block_request_id"));
+    const char *timeout_type_ptr = json_string_value(json_object_get(payload_obj, "timeout_type"));
+    
+    char original_block_request_id[64] = {0};
+    char timeout_type[64] = {0};
+    
+    if (original_block_request_id_ptr) {
+        strncpy(original_block_request_id, original_block_request_id_ptr, sizeof(original_block_request_id) - 1);
+    }
+    if (timeout_type_ptr) {
+        strncpy(timeout_type, timeout_type_ptr, sizeof(timeout_type) - 1);
+    }
+    
+    json_decref(payload_obj);  // 现在可以安全地释放了
 
     if (router_id > 0 && router_id <= MAX_ROUTERS &&
         router_states[router_id].status == BLOCKED &&
@@ -1253,16 +1423,16 @@ void handle_timeout_event(Event event) {
         }
         
         // 对于 SLEEP_CALL，发送 SUCCESS 响应；对于其他超时，发送 TIMEOUT 响应
-        if (timeout_type && strcmp(timeout_type, "SLEEP_CALL") == 0) {
+        if (timeout_type[0] != '\0' && strcmp(timeout_type, "SLEEP_CALL") == 0) {
             send_success_response(router_id, original_block_request_id, "SLEEP", "Sleep Completed", NULL);
             printf("[DESD] R%d sleep completed for request %s at VT=%.3f.\n", router_id, original_block_request_id, current_virtual_time);
         } else {
-            send_timeout_response(router_id, original_block_request_id, timeout_type);
-            printf("[DESD] R%d timed out for request %s (Type: %s) at VT=%.3f.\n", router_id, original_block_request_id, timeout_type ? timeout_type : "UNKNOWN", current_virtual_time);
+            send_timeout_response(router_id, original_block_request_id, timeout_type[0] != '\0' ? timeout_type : "UNKNOWN");
+            printf("[DESD] R%d timed out for request %s (Type: %s) at VT=%.3f.\n", router_id, original_block_request_id, timeout_type[0] != '\0' ? timeout_type : "UNKNOWN", current_virtual_time);
         }
     } else {
         printf("[DESD] TIMEOUT_EVENT %lu for R%d ignored (router not blocked on this request %s anymore or already handled).\n",
-               event.event_id, router_id, original_block_request_id ? original_block_request_id : "UNKNOWN");
+               event.event_id, router_id, original_block_request_id[0] != '\0' ? original_block_request_id : "UNKNOWN");
     }
 }
 

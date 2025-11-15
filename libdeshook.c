@@ -382,10 +382,42 @@ ssize_t send(int sockfd, const void *buf, size_t len, int flags) {
         errno = ENOMEM;
         return -1;
     }
+    
+    // 将数据进行 Base64 编码，包含在 payload 中发送给 desd
+    size_t base64_len = ((len + 2) / 3) * 4 + 1;  // Base64 编码后的长度
+    char *base64_data = (char*)malloc(base64_len);
+    if (!base64_data) {
+        fprintf(stderr, "[LIBDESHOOK ERROR] Failed to allocate base64 buffer\n");
+        json_decref(payload_obj);
+        errno = ENOMEM;
+        return -1;
+    }
+    
+    // 简单的 Base64 编码（为了简化，这里直接用 hex 编码）
+    size_t hex_len = len * 2 + 1;
+    char *hex_data = (char*)malloc(hex_len);
+    if (!hex_data) {
+        fprintf(stderr, "[LIBDESHOOK ERROR] Failed to allocate hex buffer\n");
+        free(base64_data);
+        json_decref(payload_obj);
+        errno = ENOMEM;
+        return -1;
+    }
+    
+    const unsigned char *byte_buf = (const unsigned char *)buf;
+    for (size_t i = 0; i < len; i++) {
+        sprintf(hex_data + i * 2, "%02x", byte_buf[i]);
+    }
+    hex_data[len * 2] = '\0';
+    
     json_object_set_new(payload_obj, "destination_abstract_address", json_string(ROUTER_SOCKET_PATH)); // 简化处理，假设发往ROUTER_SOCKET_PATH
     json_object_set_new(payload_obj, "request_id", json_string(send_req.request_id));
-    json_object_set_new(payload_obj, "bytes_sent", json_integer(len)); // Use len, not bytes_sent from real_send yet
-    json_object_set_new(payload_obj, "socket_fd", json_integer(sockfd));  // 添加 socket_fd
+    json_object_set_new(payload_obj, "bytes_sent", json_integer(len));
+    json_object_set_new(payload_obj, "socket_fd", json_integer(sockfd));
+    json_object_set_new(payload_obj, "packet_data", json_string(hex_data));  // 添加数据
+    
+    free(hex_data);
+    free(base64_data);
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     if (!payload_str) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Failed to dump JSON\n");
@@ -412,12 +444,12 @@ ssize_t send(int sockfd, const void *buf, size_t len, int flags) {
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
 
-            printf("[LIBDESHOOK] R%d send() unblocked by DESD. Now performing real send.\n", my_router_id);
+            printf("[LIBDESHOOK] R%d send() completed (data sent through DESD, len=%ld).\n", my_router_id, len);
             if (resp_payload_obj) json_decref(resp_payload_obj);
 
-            // 3. DESD确认后，调用真实的send()
-            ssize_t bytes_sent = real_send(sockfd, buf, len, flags);
-            return bytes_sent;
+            // 数据已通过 desd 传输，不需要调用 real_send()
+            // 直接返回发送的字节数
+            return len;
 
         } else {
             const char* error_message = "Unknown error";
@@ -475,18 +507,39 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
         if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
             strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "SUCCESS") == 0) {
             
-            printf("[LIBDESHOOK] R%d recv() unblocked by DESD. Now performing real recv.\n", my_router_id);
-            if (resp_payload_obj) json_decref(resp_payload_obj);
-            // DESD解除阻塞后，再次尝试从真实socket读取数据 (此时应该有数据了)
-            // 注意：这里仍然需要设置超时或非阻塞模式来避免死锁，但理想情况下DESD会确保数据已到
-            fprintf(stderr, "before real_recv\n");
-            ssize_t final_bytes_received = real_recv(sockfd, buf, len, flags); // 再次调用真实recv
-            if (final_bytes_received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                fprintf(stderr, "[LIBDESHOOK ERROR] R%d recv() unblocked by DESD but no data immediately available.\n", my_router_id);
-                // 这种情况理论上不应该发生，除非DESD调度错误或数据丢失
-                errno = EIO; // 模拟I/O错误
+            printf("[LIBDESHOOK] R%d recv() unblocked by DESD. Receiving data from DESD.\n", my_router_id);
+            
+            // 从 desd 的响应中读取数据（hex 编码）
+            json_t *packet_data_json = json_object_get(resp_payload_obj, "packet_data");
+            if (!packet_data_json || !json_is_string(packet_data_json)) {
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d recv() - no packet_data in DESD response.\n", my_router_id);
+                if (resp_payload_obj) json_decref(resp_payload_obj);
+                errno = EIO;
+                return -1;
             }
-            return final_bytes_received;
+            
+            const char *hex_data = json_string_value(packet_data_json);
+            size_t hex_len = strlen(hex_data);
+            size_t data_len = hex_len / 2;
+            
+            if (data_len > len) {
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d recv() - received data (%zu bytes) larger than buffer (%zu bytes).\n", 
+                        my_router_id, data_len, len);
+                if (resp_payload_obj) json_decref(resp_payload_obj);
+                errno = EOVERFLOW;
+                return -1;
+            }
+            
+            // 解码 hex 数据到 buf
+            for (size_t i = 0; i < data_len; i++) {
+                unsigned int byte_val;
+                sscanf(hex_data + i * 2, "%2x", &byte_val);
+                ((unsigned char*)buf)[i] = (unsigned char)byte_val;
+            }
+            
+            printf("[LIBDESHOOK] R%d recv() completed (received %zu bytes from DESD).\n", my_router_id, data_len);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+            return data_len;
 
         } else if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
                    strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "TIMEOUT") == 0) {
@@ -638,12 +691,13 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
             
-            printf("[LIBDESHOOK] R%d select() unblocked by DESD. Now performing real select.\n", my_router_id);
+            printf("[LIBDESHOOK] R%d select() unblocked by DESD (data available in desd buffer).\n", my_router_id);
             if (resp_payload_obj) json_decref(resp_payload_obj);
 
-            // DESD解除阻塞后，调用真实的select（非阻塞检查，应该有数据就绪）
-            struct timeval tv_zero = {0, 0};
-            return real_select(nfds, readfds, writefds, exceptfds, &tv_zero);
+            // 数据在 desd 的缓冲区中，不在真实 socket 中
+            // 直接返回 1 表示有 fd 就绪（readfds 中的 socket）
+            // readfds 保持不变，用户会认为该 socket 有数据可读
+            return 1;
 
         } else if (status_json && json_is_string(status_json) &&
                    strcmp(json_string_value(status_json), "TIMEOUT") == 0) {
