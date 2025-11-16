@@ -193,13 +193,20 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
 
 // connect
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
-    // 如果desd未连接，或者不是针对ROUTER_SOCKET_PATH的连接，则直接调用真实connect
-    if (desd_control_socket_fd == -1 || addr->sa_family != AF_UNIX ||
-        (addr->sa_family == AF_UNIX && strcmp(((struct sockaddr_un *)addr)->sun_path, ROUTER_SOCKET_PATH) != 0)) {
+    // 如果desd未连接，或者不是 Unix domain socket，则直接调用真实connect
+    if (desd_control_socket_fd == -1 || addr->sa_family != AF_UNIX) {
+        return real_connect(sockfd, addr, addrlen);
+    }
+    
+    // 获取目标路径
+    const char *target_path = ((struct sockaddr_un *)addr)->sun_path;
+    
+    // 如果是连接到 desd 控制 socket，不拦截
+    if (strcmp(target_path, DESD_CONTROL_SOCKET_PATH) == 0) {
         return real_connect(sockfd, addr, addrlen);
     }
 
-    printf("[LIBDESHOOK] R%d intercepted connect() to %s.\n", my_router_id, ROUTER_SOCKET_PATH);
+    printf("[LIBDESHOOK] R%d intercepted connect() to %s.\n", my_router_id, target_path);
 
     // 1. 告知desd：发送CONNECT_REQUEST_EVENT事件
     Message connect_req;
@@ -210,7 +217,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     connect_req.virtual_time = current_virtual_time;
     generate_request_id(connect_req.request_id);
     json_t *payload_obj = json_object();
-    json_object_set_new(payload_obj, "destination_abstract_address", json_string(ROUTER_SOCKET_PATH));
+    json_object_set_new(payload_obj, "destination_abstract_address", json_string(target_path));
     json_object_set_new(payload_obj, "request_id", json_string(connect_req.request_id));
     json_object_set_new(payload_obj, "socket_fd", json_integer(sockfd));  // 添加 socket_fd
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
@@ -233,9 +240,14 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
 
             printf("[LIBDESHOOK] R%d connect() to %s successful (DESD confirmed). Now performing real connect.\n",
-                   my_router_id, ROUTER_SOCKET_PATH);
+                   my_router_id, target_path);
             if (resp_payload_obj) json_decref(resp_payload_obj);
+            
             // 2. DESD确认连接建立事件后，调用真实的connect()
+            // 注意：客户端不需要发送 CONNECTION_INFO_EVENT，因为：
+            // 1. 客户端的 socket_fd 在 CONNECT_REQUEST_EVENT 中已知
+            // 2. CONNECTION_ESTABLISHED_EVENT 已经注册了客户端连接
+            // 3. 只有服务端需要发送 CONNECTION_INFO_EVENT（通知 accept() 返回的 fd）
             return real_connect(sockfd, addr, addrlen);
 
         } else {
@@ -595,7 +607,16 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     if (timeout > 0) {
         json_object_set_new(payload_obj, "timeout_ms", json_integer(timeout));
     }
-    // 传递pollfd信息会更复杂，这里简化，假设desd知道哪些FD是相关的
+    
+    // 传递监听的 FD 列表（方案B：完整实现）
+    json_t *monitored_fds_array = json_array();
+    for (nfds_t i = 0; i < nfds; i++) {
+        if (fds[i].events & POLLIN) {
+            json_array_append_new(monitored_fds_array, json_integer(fds[i].fd));
+        }
+    }
+    json_object_set_new(payload_obj, "monitored_fds", monitored_fds_array);
+    
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     strncpy(poll_block_req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
     poll_block_req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
@@ -609,18 +630,61 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
         if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
             strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "SUCCESS") == 0) {
             
-            printf("[LIBDESHOOK] R%d poll() unblocked by DESD. Now performing real poll with specified timeout.\n", my_router_id);
+            // 方案B：从响应中提取就绪的 FD 列表
+            json_t *ready_fds_array = json_object_get(resp_payload_obj, "ready_fds");
+            
+            // 清除所有 revents
+            for (nfds_t i = 0; i < nfds; i++) {
+                fds[i].revents = 0;
+            }
+            
+            int ready_count = 0;
+            
+            if (ready_fds_array && json_is_array(ready_fds_array)) {
+                // 根据 ready_fds 精确设置 revents
+                size_t array_size = json_array_size(ready_fds_array);
+                
+                for (size_t j = 0; j < array_size; j++) {
+                    json_t *fd_elem = json_array_get(ready_fds_array, j);
+                    if (fd_elem && json_is_integer(fd_elem)) {
+                        int ready_fd = json_integer_value(fd_elem);
+                        
+                        // 在 fds 数组中查找匹配的 FD 并设置 revents
+                        for (nfds_t i = 0; i < nfds; i++) {
+                            if (fds[i].fd == ready_fd && (fds[i].events & POLLIN)) {
+                                fds[i].revents = POLLIN;
+                                ready_count++;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                printf("[LIBDESHOOK] R%d poll() unblocked by DESD (%d ready FD(s) out of %zu reported).\n", 
+                       my_router_id, ready_count, array_size);
+            } else {
+                // 回退：如果没有 ready_fds 字段，使用旧逻辑
+                printf("[LIBDESHOOK] R%d poll() unblocked by DESD (no FD list, setting all POLLIN FDs).\n", my_router_id);
+                for (nfds_t i = 0; i < nfds; i++) {
+                    if (fds[i].events & POLLIN) {
+                        fds[i].revents = POLLIN;
+                        ready_count++;
+                    }
+                }
+            }
+            
             if (resp_payload_obj) json_decref(resp_payload_obj);
-
-            // DESD解除阻塞后，调用真实的poll
-            // 此时，需要根据DESD的调度，重新设置pollfd的revents
-            // 这里简化为再次调用真实poll，并期望有FD就绪
-            // 理想情况下，DESD会在响应中指示哪些FD就绪
-            return real_poll(fds, nfds, 0); // 再次非阻塞调用，期望返回就绪FD数量
+            return ready_count;  // 返回就绪 FD 数量
 
         } else if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
                    strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "TIMEOUT") == 0) {
             printf("[LIBDESHOOK] R%d poll() timed out (DESD confirmed).\n", my_router_id);
+            
+            // 清除所有 revents
+            for (nfds_t i = 0; i < nfds; i++) {
+                fds[i].revents = 0;
+            }
+            
             if (resp_payload_obj) json_decref(resp_payload_obj);
             return 0; // poll timeout returns 0
         }else {
