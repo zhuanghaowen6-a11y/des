@@ -12,16 +12,21 @@
 
 ### 📖 功能特性文档
 
-2. **[POLL_SUPPORT.md](POLL_SUPPORT.md)** - poll() 系统调用支持
+2. **[TCP_SUPPORT.md](TCP_SUPPORT.md)** - **TCP 通信支持**（新增）
+   - TCP/IP (AF_INET) 通信支持
+   - 与 UDS 的兼容性
+   - BIRD BGP 等真实路由器镜像支持
+
+3. **[POLL_SUPPORT.md](POLL_SUPPORT.md)** - poll() 系统调用支持
    - poll() 实现状态
    - FD 精确匹配机制
    - 与 select() 的对比
 
-3. **[MULTI_LISTEN_IMPLEMENTATION.md](MULTI_LISTEN_IMPLEMENTATION.md)** - 多监听地址支持
+4. **[MULTI_LISTEN_IMPLEMENTATION.md](MULTI_LISTEN_IMPLEMENTATION.md)** - 多监听地址支持
    - 路由器监听多个地址的实现
    - 动态路由查找机制
 
-4. **[COMPLETE_IMPLEMENTATION_EXPLANATION.md](COMPLETE_IMPLEMENTATION_EXPLANATION.md)** - 完整实现说明
+5. **[COMPLETE_IMPLEMENTATION_EXPLANATION.md](COMPLETE_IMPLEMENTATION_EXPLANATION.md)** - 完整实现说明
    - 从 poll() 支持到连接映射修复的完整过程
    - 详细的问题分析和解决方案演进
 
@@ -66,6 +71,9 @@ sudo ROUTER_ID=1 LD_PRELOAD=./libdeshook.so ./r1
 ```bash
 # poll() 功能测试
 sudo ./run_poll_test_auto_v2.sh
+
+# TCP 通信测试（新增）
+sudo ./run_tcp_test.sh
 ```
 
 ---
@@ -79,7 +87,8 @@ sudo ./run_poll_test_auto_v2.sh
   common.h/c       - 公共定义（消息格式、事件类型、JSON 处理）
 
 测试程序：
-  r1.c, r2.c                      - 基本通信测试
+  r1.c, r2.c                      - 基本通信测试（UDS）
+  r1_test_tcp.c, r2_test_tcp.c    - TCP 通信测试（新增）
   r1_timeout_test.c, r2_timeout_test.c  - 超时机制测试
   r_poll_server_test_v2.c, r_poll_client_test_v2.c  - poll() 精确匹配测试
 

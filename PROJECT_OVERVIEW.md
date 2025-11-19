@@ -27,6 +27,7 @@
 - **透明拦截**：使用 LD_PRELOAD 拦截 socket API 调用
 - **精确模拟**：模拟网络延迟、连接建立时间等
 - **多路复用支持**：支持 `select()` 和 `poll()` 系统调用
+- **TCP/UDS 支持**：同时支持 Unix Domain Socket 和 TCP 通信
 
 ### 基本原理
 ```
@@ -516,6 +517,12 @@ int n = real_recv(sockfd, buf, len, 0);
 - [x] send/recv（虚拟时间阻塞）
 - [x] close（直接调用）
 
+### ✅ 通信协议支持
+- [x] Unix Domain Socket (UDS)
+- [x] TCP/IP (AF_INET)
+- [x] UDS 和 TCP 混合使用
+- [x] 地址抽象化（UDS 路径 / TCP "IP:Port"）
+
 ### ✅ 多路复用
 - [x] select() 基本支持（不精确 FD 匹配）
 - [x] poll() 完整支持（精确 FD 匹配）
@@ -545,13 +552,16 @@ des_design/
 ├── libdeshook.c                    # API 拦截层
 ├── common.h                        # 公共定义
 ├── common.c                        # 公共函数实现
-├── r1.c                            # 测试程序：客户端
-├── r2.c                            # 测试程序：服务端
+├── r1.c                            # 测试程序：UDS 客户端
+├── r2.c                            # 测试程序：UDS 服务端
+├── r1_test_tcp.c                   # 测试程序：TCP 客户端
+├── r2_test_tcp.c                   # 测试程序：TCP 服务端
 ├── r1_timeout_test.c               # 超时测试：客户端
 ├── r2_timeout_test.c               # 超时测试：服务端
 ├── r_poll_server_test_v2.c         # poll 测试：服务端
 ├── r_poll_client_test_v2.c         # poll 测试：客户端
 ├── run_poll_test_auto_v2.sh        # poll 自动化测试脚本
+├── run_tcp_test.sh                 # TCP 自动化测试脚本
 ├── Makefile                        # 构建脚本
 └── *.md                            # 文档
 
@@ -750,7 +760,9 @@ Poll returned 2 ready FDs (expected 2) ✓
 - [ ] 支持更多路由器（当前 2 个）
 
 ### 功能扩展
+- [x] ~~支持 TCP~~ （已完成）
 - [ ] 支持 UDP
+- [ ] 支持 IPv6 (AF_INET6)
 - [ ] 支持 epoll
 - [ ] 动态拓扑变化
 - [ ] 数据包丢失模拟

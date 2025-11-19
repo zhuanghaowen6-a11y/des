@@ -6,7 +6,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include "common.h" // 引入 common.h 以使用 ROUTER_SOCKET_PATH
-
+#include <assert.h>
 // #define SOCK_PATH "/tmp/router_socket" // 不再需要，使用 common.h 中的定义
 #define BUF_SIZE 1024
 
@@ -17,6 +17,7 @@ int main() {
 
     // 1. 创建 socket
     sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    assert(0);
     if (sockfd < 0) {
         perror("socket");
         exit(1);

@@ -8,6 +8,8 @@
 #include <dlfcn.h>      // For dlsym
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <netinet/in.h> // For sockaddr_in
+#include <arpa/inet.h>  // For inet_ntop
 #include <errno.h>
 #include <jansson.h>    // For JSON handling
 #include <sys/time.h> // For select timeout
@@ -193,20 +195,41 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
 
 // connect
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
-    // 如果desd未连接，或者不是 Unix domain socket，则直接调用真实connect
-    if (desd_control_socket_fd == -1 || addr->sa_family != AF_UNIX) {
+    // 如果desd未连接，则直接调用真实connect
+    if (desd_control_socket_fd == -1) {
         return real_connect(sockfd, addr, addrlen);
     }
     
-    // 获取目标路径
-    const char *target_path = ((struct sockaddr_un *)addr)->sun_path;
-    
-    // 如果是连接到 desd 控制 socket，不拦截
-    if (strcmp(target_path, DESD_CONTROL_SOCKET_PATH) == 0) {
+    // 只拦截 AF_UNIX 和 AF_INET 的连接
+    if (addr->sa_family != AF_UNIX && addr->sa_family != AF_INET) {
         return real_connect(sockfd, addr, addrlen);
+    }
+    
+    // 构建抽象地址字符串
+    char abstract_address[256];
+    
+    if (addr->sa_family == AF_UNIX) {
+        // Unix domain socket: 使用路径作为抽象地址
+        const char *target_path = ((struct sockaddr_un *)addr)->sun_path;
+        
+        // 如果是连接到 desd 控制 socket，不拦截
+        if (strcmp(target_path, DESD_CONTROL_SOCKET_PATH) == 0) {
+            return real_connect(sockfd, addr, addrlen);
+        }
+        
+        strncpy(abstract_address, target_path, sizeof(abstract_address) - 1);
+        abstract_address[sizeof(abstract_address) - 1] = '\0';
+    } else if (addr->sa_family == AF_INET) {
+        // TCP socket: 使用 IP:Port 作为抽象地址
+        struct sockaddr_in *tcp_addr = (struct sockaddr_in *)addr;
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(tcp_addr->sin_addr), ip_str, INET_ADDRSTRLEN);
+        int port = ntohs(tcp_addr->sin_port);
+        snprintf(abstract_address, sizeof(abstract_address), "%s:%d", ip_str, port);
     }
 
-    printf("[LIBDESHOOK] R%d intercepted connect() to %s.\n", my_router_id, target_path);
+    printf("[LIBDESHOOK] R%d intercepted connect() to %s (family: %s).\n", 
+           my_router_id, abstract_address, addr->sa_family == AF_UNIX ? "AF_UNIX" : "AF_INET");
 
     // 1. 告知desd：发送CONNECT_REQUEST_EVENT事件
     Message connect_req;
@@ -217,7 +240,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     connect_req.virtual_time = current_virtual_time;
     generate_request_id(connect_req.request_id);
     json_t *payload_obj = json_object();
-    json_object_set_new(payload_obj, "destination_abstract_address", json_string(target_path));
+    json_object_set_new(payload_obj, "destination_abstract_address", json_string(abstract_address));
     json_object_set_new(payload_obj, "request_id", json_string(connect_req.request_id));
     json_object_set_new(payload_obj, "socket_fd", json_integer(sockfd));  // 添加 socket_fd
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
@@ -240,7 +263,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
 
             printf("[LIBDESHOOK] R%d connect() to %s successful (DESD confirmed). Now performing real connect.\n",
-                   my_router_id, target_path);
+                   my_router_id, abstract_address);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             
             // 2. DESD确认连接建立事件后，调用真实的connect()
@@ -803,6 +826,12 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         if (strcmp(un_addr->sun_path, ROUTER_SOCKET_PATH) == 0) {
             printf("[LIBDESHOOK] R%d intercepted bind() to %s. Allowing real bind.\n", my_router_id, ROUTER_SOCKET_PATH);
         }
+    } else if (addr->sa_family == AF_INET) {
+        struct sockaddr_in *tcp_addr = (struct sockaddr_in *)addr;
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(tcp_addr->sin_addr), ip_str, INET_ADDRSTRLEN);
+        int port = ntohs(tcp_addr->sin_port);
+        printf("[LIBDESHOOK] R%d intercepted bind() to %s:%d. Allowing real bind.\n", my_router_id, ip_str, port);
     }
     return real_bind(sockfd, addr, addrlen);
 }
@@ -822,12 +851,29 @@ int listen(int sockfd, int backlog) {
         return result;
     }
 
-    // listen 成功后，获取 socket 绑定的地址
-    struct sockaddr_un addr;
-    socklen_t addr_len = sizeof(addr);
-    if (getsockname(sockfd, (struct sockaddr *)&addr, &addr_len) != 0) {
+    // listen 成功后，获取 socket 绑定的地址（支持 UDS 和 TCP）
+    struct sockaddr_storage addr_storage;
+    socklen_t addr_len = sizeof(addr_storage);
+    if (getsockname(sockfd, (struct sockaddr *)&addr_storage, &addr_len) != 0) {
         fprintf(stderr, "[LIBDESHOOK ERROR] R%d failed to get socket name for fd %d.\n", my_router_id, sockfd);
         return result; // listen 已经成功，所以返回成功
+    }
+
+    // 构建抽象地址字符串
+    char listen_address[256];
+    if (addr_storage.ss_family == AF_UNIX) {
+        struct sockaddr_un *un_addr = (struct sockaddr_un *)&addr_storage;
+        strncpy(listen_address, un_addr->sun_path, sizeof(listen_address) - 1);
+        listen_address[sizeof(listen_address) - 1] = '\0';
+    } else if (addr_storage.ss_family == AF_INET) {
+        struct sockaddr_in *tcp_addr = (struct sockaddr_in *)&addr_storage;
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(tcp_addr->sin_addr), ip_str, INET_ADDRSTRLEN);
+        int port = ntohs(tcp_addr->sin_port);
+        snprintf(listen_address, sizeof(listen_address), "%s:%d", ip_str, port);
+    } else {
+        fprintf(stderr, "[LIBDESHOOK ERROR] R%d unsupported address family for listen.\n", my_router_id);
+        return result;
     }
 
     // 向 desd 发送 LISTEN_EVENT
@@ -840,7 +886,7 @@ int listen(int sockfd, int backlog) {
     generate_request_id(listen_msg.request_id);
 
     json_t *payload_obj = json_object();
-    json_object_set_new(payload_obj, "listen_address", json_string(addr.sun_path));
+    json_object_set_new(payload_obj, "listen_address", json_string(listen_address));
     json_object_set_new(payload_obj, "request_id", json_string(listen_msg.request_id));
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     strncpy(listen_msg.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
@@ -859,7 +905,7 @@ int listen(int sockfd, int backlog) {
 
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
-            printf("[LIBDESHOOK] R%d listen() registered with DESD on %s.\n", my_router_id, addr.sun_path);
+            printf("[LIBDESHOOK] R%d listen() registered with DESD on %s.\n", my_router_id, listen_address);
             if (resp_payload_obj) json_decref(resp_payload_obj);
         } else {
             fprintf(stderr, "[LIBDESHOOK WARNING] R%d listen() registration with DESD failed.\n", my_router_id);
