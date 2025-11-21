@@ -350,11 +350,44 @@ typedef enum {
      |                    等待 PACKET_RECEIVE_EVENT 或 TIMEOUT |
 ```
 
-**poll() 的精确 FD 匹配**：
-- libdeshook 发送 `monitored_fds` 列表给 desd
-- desd 检查 PacketBuffer，收集所有有数据的 socket_fd
-- desd 返回 `ready_fds` 列表
-- libdeshook 精确设置每个 `pollfd.revents`
+**poll() 的增强支持（完整事件类型）**：
+
+**请求格式**（libdeshook → desd）：
+```json
+{
+  "monitored_fds": [
+    {"fd": 4, "events": 0x001},  // POLLIN
+    {"fd": 5, "events": 0x005}   // POLLIN | POLLOUT
+  ],
+  "timeout_ms": 5000
+}
+```
+
+**响应格式**（desd → libdeshook）：
+```json
+{
+  "ready_fds": [
+    {"fd": 4, "revents": 0x001},  // POLLIN (有数据可读)
+    {"fd": 5, "revents": 0x004}   // POLLOUT (可写)
+  ]
+}
+```
+
+**支持的事件类型**：
+- `POLLIN (0x001)` - 有数据可读（检查 PacketBuffer）
+- `POLLOUT (0x004)` - socket 可写（检查连接状态）
+- `POLLERR (0x008)` - 错误条件（检查连接错误）
+- `POLLHUP (0x010)` - 连接挂起（检查连接是否活跃）
+- `POLLNVAL (0x020)` - 无效请求（基础支持）
+
+**处理逻辑**：
+1. libdeshook 发送包含每个 fd 的 events 信息
+2. desd 根据不同事件类型进行检查：
+   - POLLIN：遍历 PacketBuffer，查找有数据的 socket_fd
+   - POLLOUT：检查连接是否存在且活跃
+   - POLLHUP：检查连接是否已断开
+3. desd 返回每个 fd 的 revents
+4. libdeshook 精确设置每个 `pollfd.revents`
 
 ---
 
@@ -525,10 +558,12 @@ int n = real_recv(sockfd, buf, len, 0);
 
 ### ✅ 多路复用
 - [x] select() 基本支持（不精确 FD 匹配）
-- [x] poll() 完整支持（精确 FD 匹配）
-  - 发送 `monitored_fds` 列表
-  - 接收 `ready_fds` 列表
+- [x] poll() 完整支持（精确 FD 匹配）**【已增强】**
+  - 发送 `monitored_fds` 列表（包含events信息）
+  - 接收 `ready_fds` 列表（包含revents信息）
   - 精确设置 `pollfd.revents`
+  - **支持 POLLIN/POLLOUT/POLLERR/POLLHUP** 等多种事件
+  - 测试程序：`r_poll_server_enhanced.c`, `r_poll_client_enhanced.c`
 
 ### ✅ 时间管理
 - [x] sleep() 虚拟时间推进
@@ -558,12 +593,22 @@ des_design/
 ├── r2_test_tcp.c                   # 测试程序：TCP 服务端
 ├── r1_timeout_test.c               # 超时测试：客户端
 ├── r2_timeout_test.c               # 超时测试：服务端
-├── r_poll_server_test_v2.c         # poll 测试：服务端
-├── r_poll_client_test_v2.c         # poll 测试：客户端
+├── r_poll_server_test_v2.c         # poll 测试：服务端（多连接）
+├── r_poll_client_test_v2.c         # poll 测试：客户端（多连接）
+├── r_poll_server_enhanced.c        # poll 增强测试：服务端（多事件类型）
+├── r_poll_client_enhanced.c        # poll 增强测试：客户端（多事件类型）
 ├── run_poll_test_auto_v2.sh        # poll 自动化测试脚本
+├── run_poll_enhanced_test.sh       # poll 增强功能测试脚本
 ├── run_tcp_test.sh                 # TCP 自动化测试脚本
 ├── Makefile                        # 构建脚本
 └── *.md                            # 文档
+    ├── PROJECT_OVERVIEW.md         # 项目总览（本文档）
+    ├── README.md                   # 快速开始指南
+    ├── POLL_SUPPORT.md             # poll() 支持文档
+    ├── POLL_ENHANCEMENT_REPORT.md  # poll 增强功能报告
+    ├── POLL_USAGE_GUIDE.md         # poll 使用指南
+    ├── TCP_SUPPORT.md              # TCP 支持文档
+    └── 其他文档...
 
 编译产物：
 ├── desd                            # 调度器可执行文件
@@ -717,6 +762,76 @@ Poll returned 2 ready FDs (expected 2) ✓
   FD 6: revents=POLLIN ✓
   FD 8: revents=POLLIN ✓
 ```
+
+### 4. poll() 增强功能测试（多事件类型）
+
+**测试程序**：`r_poll_server_enhanced.c`, `r_poll_client_enhanced.c`
+
+**测试内容**：
+- **Test 1: POLLOUT** - 检查 socket 可写状态
+- **Test 2: POLLIN** - 检查数据可读状态
+- **Test 3: POLLIN | POLLOUT** - 同时监听多种事件
+
+**测试的事件类型**：
+- `POLLIN (0x001)` - 有数据可读
+- `POLLOUT (0x004)` - socket 可写
+- `POLLHUP (0x010)` - 连接挂起
+
+**运行方式**：
+```bash
+sudo ./run_poll_enhanced_test.sh
+```
+
+**预期结果**：
+```
+========== Test Summary ==========
+✓ POLLOUT test PASSED
+✓ POLLIN test PASSED
+✓ Combined events test PASSED
+
+Final Score: 3 passed, 0 failed
+✓ All tests PASSED!
+```
+
+**详细输出示例**：
+```
+R2 (Server):
+--- Test 1: POLLOUT (socket writable) ---
+✓ poll() returned 1 ready FD(s)
+✓ POLLOUT detected: socket is writable
+✓ Sent 18 bytes: "Hello from server!"
+
+--- Test 2: POLLIN (data available) ---
+✓ poll() returned 1 ready FD(s)
+✓ POLLIN detected: data available
+✓ Received 18 bytes: "Hello from client!"
+
+--- Test 3: POLLIN | POLLOUT (both events) ---
+✓ poll() returned 1 ready FD(s)
+  revents = 0x0004 (POLLOUT)
+✓ Socket is writable
+
+R1 (Client):
+--- Test 1: POLLIN (waiting for server message) ---
+✓ poll() returned 1 ready FD(s)
+✓ POLLIN detected: data available
+✓ Received 18 bytes: "Hello from server!"
+
+--- Test 2: POLLOUT (socket writable) ---
+✓ poll() returned 1 ready FD(s)
+✓ POLLOUT detected: socket is writable
+✓ Sent 18 bytes: "Hello from client!"
+
+--- Test 3: POLLIN | POLLOUT (both events) ---
+✓ poll() returned 1 ready FD(s)
+  revents = 0x0015 (POLLIN POLLOUT POLLHUP)
+✓ Socket is writable
+✓ Data is available
+```
+
+**相关文档**：
+- `POLL_ENHANCEMENT_REPORT.md` - 详细的实施报告
+- `POLL_USAGE_GUIDE.md` - 使用指南和示例
 
 ---
 

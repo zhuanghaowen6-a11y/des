@@ -22,6 +22,15 @@
    - FD 精确匹配机制
    - 与 select() 的对比
 
+3.1 **[POLL_ENHANCEMENT_REPORT.md](POLL_ENHANCEMENT_REPORT.md)** - **poll增强功能报告**（新增）
+   - POLLOUT/POLLERR/POLLHUP支持
+   - 完整的实施方案和测试报告
+
+3.2 **[POLL_USAGE_GUIDE.md](POLL_USAGE_GUIDE.md)** - **poll使用指南**（新增）
+   - 快速上手示例
+   - 常见使用模式
+   - 调试和故障排查
+
 4. **[MULTI_LISTEN_IMPLEMENTATION.md](MULTI_LISTEN_IMPLEMENTATION.md)** - 多监听地址支持
    - 路由器监听多个地址的实现
    - 动态路由查找机制
@@ -69,11 +78,25 @@ sudo ROUTER_ID=1 LD_PRELOAD=./libdeshook.so ./r1
 ### 3. 运行自动化测试
 
 ```bash
-# poll() 功能测试
+# poll() FD精确匹配测试（多连接）
 sudo ./run_poll_test_auto_v2.sh
 
-# TCP 通信测试（新增）
+# poll() 增强功能测试（多事件类型）- 新增
+sudo ./run_poll_enhanced_test.sh
+
+# TCP 通信测试
 sudo ./run_tcp_test.sh
+```
+
+**poll增强功能测试输出示例**：
+```
+========== Test Summary ==========
+✓ POLLOUT test PASSED    # Socket可写检测
+✓ POLLIN test PASSED     # 数据可读检测
+✓ Combined events test PASSED  # 组合事件检测
+
+Final Score: 3 passed, 0 failed
+✓ All tests PASSED!
 ```
 
 ---
@@ -88,9 +111,10 @@ sudo ./run_tcp_test.sh
 
 测试程序：
   r1.c, r2.c                      - 基本通信测试（UDS）
-  r1_test_tcp.c, r2_test_tcp.c    - TCP 通信测试（新增）
+  r1_test_tcp.c, r2_test_tcp.c    - TCP 通信测试
   r1_timeout_test.c, r2_timeout_test.c  - 超时机制测试
-  r_poll_server_test_v2.c, r_poll_client_test_v2.c  - poll() 精确匹配测试
+  r_poll_server_test_v2.c, r_poll_client_test_v2.c    - poll() FD精确匹配（多连接）
+  r_poll_server_enhanced.c, r_poll_client_enhanced.c  - poll() 增强功能（多事件）✨新增
 
 构建和运行：
   Makefile         - 构建脚本
@@ -122,6 +146,34 @@ sudo ./run_tcp_test.sh
    ConnectionInfo[0]    ConnectionInfo[0]
    peer_router_id: 2    peer_router_id: 1
    peer_socket_fd: 5    peer_socket_fd: 4
+```
+
+### poll() 多路复用支持
+
+**支持的事件类型**（✨增强功能）：
+```c
+POLLIN  (0x001)  - 有数据可读    ✓ 完全支持
+POLLOUT (0x004)  - socket可写    ✓ 完全支持
+POLLERR (0x008)  - 错误条件      ✓ 部分支持
+POLLHUP (0x010)  - 连接挂起      ✓ 完全支持
+POLLNVAL (0x020) - 无效请求      ⚠️ 基础支持
+```
+
+**工作原理**：
+1. libdeshook 发送每个fd的 `events` 给 desd
+2. desd 根据事件类型检查对应条件
+3. desd 返回每个fd的 `revents` 
+4. libdeshook 精确设置 `pollfd.revents`
+
+**示例代码**：
+```c
+struct pollfd fds[2];
+fds[0].fd = sock1;
+fds[0].events = POLLIN;         // 监听可读
+fds[1].fd = sock2;
+fds[1].events = POLLIN | POLLOUT;  // 监听可读+可写
+
+poll(fds, 2, 5000);  // DES会准确返回每个fd的状态
 ```
 
 ---

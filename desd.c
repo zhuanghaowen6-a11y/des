@@ -1177,56 +1177,112 @@ void handle_router_block_request(Event event) {
                        router_id, blocked_func_str_local, request_id_local);
             }
         } else if (strcmp(blocked_func_str_local, "SELECT_CALL") == 0) {
-            // 处理 SELECT_CALL：检查是否有超时参数
+            // 处理 SELECT_CALL：支持POLLIN/POLLOUT/POLLERR/POLLHUP等事件
             json_error_t error2;
             json_t *payload_obj2 = json_loads(event.payload.json_str, 0, &error2);
             int timeout_ms = -1;
+            json_t *monitored_fds_array = NULL;
+            
             if (payload_obj2) {
                 timeout_ms = json_integer_value(json_object_get(payload_obj2, "timeout_ms"));
-                json_decref(payload_obj2);
+                monitored_fds_array = json_object_get(payload_obj2, "monitored_fds");
             }
             
-            // 先检查是否有 pending 数据包（数据已到达）
-            if (router_states[router_id].pending_packets_count > 0) {
-                // 数据已就绪，立即唤醒
-                // 注意：不减少 pending_packets_count，因为数据还没有被 recv() 读取
-                // 只有 recv() 真正读取数据时才减少计数并取出 buffer_index
-                router_states[router_id].status = RUNNING;
+            // 构建就绪的 FD 列表及其 revents
+            json_t *ready_fds_array = json_array();
+            int has_ready_fds = 0;
+            
+            // 遍历所有监听的 FD，检查各种事件
+            if (monitored_fds_array && json_is_array(monitored_fds_array)) {
+                size_t array_size = json_array_size(monitored_fds_array);
                 
-                // 构建就绪的 FD 列表（遍历 pending buffer 队列，提取所有 socket_fd）
-                json_t *ready_fds_array = json_array();
-                int head = router_states[router_id].pending_buffer_head;
-                int tail = router_states[router_id].pending_buffer_tail;
-                int count = router_states[router_id].pending_packets_count;
-                
-                for (int i = 0; i < count; i++) {
-                    int idx = (head + i) % MAX_PENDING_PACKETS;
-                    int buf_idx = router_states[router_id].pending_buffer_indices[idx];
-                    if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS) {
-                        int sock_fd = router_states[router_id].packet_buffers[buf_idx].socket_fd;
-                        if (sock_fd >= 0) {
-                            // 检查是否已添加（避免重复）
-                            int already_added = 0;
-                            size_t array_size = json_array_size(ready_fds_array);
-                            for (size_t j = 0; j < array_size; j++) {
-                                if (json_integer_value(json_array_get(ready_fds_array, j)) == sock_fd) {
-                                    already_added = 1;
+                for (size_t i = 0; i < array_size; i++) {
+                    json_t *fd_info = json_array_get(monitored_fds_array, i);
+                    
+                    // 解析 {fd, events} 对象
+                    if (!json_is_object(fd_info)) continue;
+                    
+                    int fd = json_integer_value(json_object_get(fd_info, "fd"));
+                    int events = json_integer_value(json_object_get(fd_info, "events"));
+                    
+                    if (fd < 0) continue;
+                    
+                    int revents = 0;
+                    
+                    // 检查 POLLIN：是否有数据可读
+                    if (events & 0x001) {  // POLLIN = 0x001
+                        // 遍历 pending buffer 队列，查找匹配的 socket_fd
+                        int head = router_states[router_id].pending_buffer_head;
+                        int count = router_states[router_id].pending_packets_count;
+                        
+                        for (int j = 0; j < count; j++) {
+                            int idx = (head + j) % MAX_PENDING_PACKETS;
+                            int buf_idx = router_states[router_id].pending_buffer_indices[idx];
+                            if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS) {
+                                if (router_states[router_id].packet_buffers[buf_idx].socket_fd == fd) {
+                                    revents |= 0x001;  // POLLIN
                                     break;
                                 }
                             }
-                            if (!already_added) {
-                                json_array_append_new(ready_fds_array, json_integer(sock_fd));
-                            }
                         }
                     }
+                    
+                    // 检查 POLLOUT：socket 是否可写
+                    if (events & 0x004) {  // POLLOUT = 0x004
+                        // 查找该 fd 的连接信息
+                        int connection_found = 0;
+                        for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                            if (router_states[router_id].connections[j].is_active &&
+                                router_states[router_id].connections[j].socket_fd == fd) {
+                                // 连接存在且活跃，socket 可写
+                                revents |= 0x004;  // POLLOUT
+                                connection_found = 1;
+                                break;
+                            }
+                        }
+                        
+                        // 如果连接不存在或已断开，标记 POLLHUP
+                        if (!connection_found && (events & 0x004)) {
+                            revents |= 0x010;  // POLLHUP
+                        }
+                    }
+                    
+                    // 检查 POLLERR/POLLHUP：连接错误或断开
+                    // （这里可以扩展更多错误检测逻辑）
+                    // 当前简化实现：如果连接不活跃，则标记为断开
+                    for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                        if (router_states[router_id].connections[j].socket_fd == fd) {
+                            if (!router_states[router_id].connections[j].is_active) {
+                                revents |= 0x010;  // POLLHUP - 连接已断开
+                            }
+                            break;
+                        }
+                    }
+                    
+                    // 如果有任何事件就绪，添加到结果列表
+                    if (revents != 0) {
+                        json_t *ready_fd_info = json_object();
+                        json_object_set_new(ready_fd_info, "fd", json_integer(fd));
+                        json_object_set_new(ready_fd_info, "revents", json_integer(revents));
+                        json_array_append_new(ready_fds_array, ready_fd_info);
+                        has_ready_fds = 1;
+                    }
                 }
+            }
+            
+            if (payload_obj2) {
+                json_decref(payload_obj2);
+            }
+            
+            // 如果有就绪的 FD，立即唤醒
+            if (has_ready_fds) {
+                router_states[router_id].status = RUNNING;
                 
-                // 构建包含就绪 FD 列表的响应
                 size_t ready_fds_count = json_array_size(ready_fds_array);
                 json_t *response_payload = json_object();
                 json_object_set_new(response_payload, "status", json_string("SUCCESS"));
                 json_object_set_new(response_payload, "blocked_function", json_string("SELECT"));
-                json_object_set_new(response_payload, "message", json_string("Data Available"));
+                json_object_set_new(response_payload, "message", json_string("FDs Ready"));
                 json_object_set_new(response_payload, "ready_fds", ready_fds_array);
                 
                 char *response_payload_str = json_dumps(response_payload, JSON_COMPACT);
@@ -1244,9 +1300,11 @@ void handle_router_block_request(Event event) {
                 free(response_payload_str);
                 send_message_to_router(router_id, &response);
                 
-                printf("[DESD] R%d select() immediately unblocked (had %d pending packet(s), %zu unique FDs).\n", 
-                       router_id, router_states[router_id].pending_packets_count, ready_fds_count);
+                printf("[DESD] R%d select/poll() immediately unblocked (%zu ready FD(s)).\n", 
+                       router_id, ready_fds_count);
             } else {
+                // 释放空的 ready_fds_array
+                json_decref(ready_fds_array);
                 // 数据未就绪，阻塞并可能注册超时事件
                 router_states[router_id].status = BLOCKED;
                 strncpy(router_states[router_id].blocked_on_request_id, request_id_local, 63);
@@ -1551,13 +1609,21 @@ void handle_packet_receive_event(Event event) {
                             int already_added = 0;
                             size_t array_size = json_array_size(ready_fds_array);
                             for (size_t j = 0; j < array_size; j++) {
-                                if (json_integer_value(json_array_get(ready_fds_array, j)) == sock_fd) {
-                                    already_added = 1;
-                                    break;
+                                json_t *existing = json_array_get(ready_fds_array, j);
+                                if (json_is_object(existing)) {
+                                    int existing_fd = json_integer_value(json_object_get(existing, "fd"));
+                                    if (existing_fd == sock_fd) {
+                                        already_added = 1;
+                                        break;
+                                    }
                                 }
                             }
                             if (!already_added) {
-                                json_array_append_new(ready_fds_array, json_integer(sock_fd));
+                                // 使用新格式：{fd, revents}对象
+                                json_t *ready_fd_info = json_object();
+                                json_object_set_new(ready_fd_info, "fd", json_integer(sock_fd));
+                                json_object_set_new(ready_fd_info, "revents", json_integer(0x001));  // POLLIN
+                                json_array_append_new(ready_fds_array, ready_fd_info);
                             }
                         }
                     }

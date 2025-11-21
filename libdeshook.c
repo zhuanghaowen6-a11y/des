@@ -631,12 +631,13 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
         json_object_set_new(payload_obj, "timeout_ms", json_integer(timeout));
     }
     
-    // 传递监听的 FD 列表（方案B：完整实现）
+    // 传递监听的 FD 列表及其监听的事件类型（扩展支持POLLOUT/POLLERR等）
     json_t *monitored_fds_array = json_array();
     for (nfds_t i = 0; i < nfds; i++) {
-        if (fds[i].events & POLLIN) {
-            json_array_append_new(monitored_fds_array, json_integer(fds[i].fd));
-        }
+        json_t *fd_info = json_object();
+        json_object_set_new(fd_info, "fd", json_integer(fds[i].fd));
+        json_object_set_new(fd_info, "events", json_integer(fds[i].events));
+        json_array_append_new(monitored_fds_array, fd_info);
     }
     json_object_set_new(payload_obj, "monitored_fds", monitored_fds_array);
     
@@ -664,20 +665,29 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
             int ready_count = 0;
             
             if (ready_fds_array && json_is_array(ready_fds_array)) {
-                // 根据 ready_fds 精确设置 revents
+                // 根据 ready_fds 精确设置 revents（支持多种事件类型）
                 size_t array_size = json_array_size(ready_fds_array);
                 
                 for (size_t j = 0; j < array_size; j++) {
-                    json_t *fd_elem = json_array_get(ready_fds_array, j);
-                    if (fd_elem && json_is_integer(fd_elem)) {
-                        int ready_fd = json_integer_value(fd_elem);
+                    json_t *fd_info = json_array_get(ready_fds_array, j);
+                    
+                    // 解析 {fd, revents} 对象
+                    if (json_is_object(fd_info)) {
+                        json_t *fd_obj = json_object_get(fd_info, "fd");
+                        json_t *revents_obj = json_object_get(fd_info, "revents");
                         
-                        // 在 fds 数组中查找匹配的 FD 并设置 revents
-                        for (nfds_t i = 0; i < nfds; i++) {
-                            if (fds[i].fd == ready_fd && (fds[i].events & POLLIN)) {
-                                fds[i].revents = POLLIN;
-                                ready_count++;
-                                break;
+                        if (fd_obj && revents_obj) {
+                            int ready_fd = json_integer_value(fd_obj);
+                            short ready_revents = (short)json_integer_value(revents_obj);
+                            
+                            // 在 fds 数组中查找匹配的 FD 并设置 revents
+                            for (nfds_t i = 0; i < nfds; i++) {
+                                if (fds[i].fd == ready_fd) {
+                                    // 只设置客户端请求的事件类型
+                                    fds[i].revents = ready_revents & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
+                                    ready_count++;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -685,15 +695,6 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
                 
                 printf("[LIBDESHOOK] R%d poll() unblocked by DESD (%d ready FD(s) out of %zu reported).\n", 
                        my_router_id, ready_count, array_size);
-            } else {
-                // 回退：如果没有 ready_fds 字段，使用旧逻辑
-                printf("[LIBDESHOOK] R%d poll() unblocked by DESD (no FD list, setting all POLLIN FDs).\n", my_router_id);
-                for (nfds_t i = 0; i < nfds; i++) {
-                    if (fds[i].events & POLLIN) {
-                        fds[i].revents = POLLIN;
-                        ready_count++;
-                    }
-                }
             }
             
             if (resp_payload_obj) json_decref(resp_payload_obj);
