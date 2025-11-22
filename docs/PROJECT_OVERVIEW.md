@@ -136,18 +136,27 @@ void handle_router_block_request()          // 处理路由器阻塞请求
 
 **拦截的 API**：
 ```c
-socket()    - 创建 socket
+socket()    - 创建 socket (标记socket FD)
 bind()      - 绑定地址（直接调用真实 API）
 listen()    - 监听（发送 LISTEN_EVENT 给 desd）
 accept()    - 接受连接（阻塞在 desd）
 connect()   - 发起连接（阻塞在 desd）
 send()      - 发送数据（阻塞在 desd）
-recv()      - 接收数据（阻塞在 desd）
+recv()      - 接收数据（阻塞在 desd，支持非阻塞EAGAIN）
+read()      - 智能转发到recv() (仅socket FD)
+write()     - 智能转发到send() (仅socket FD)
+fcntl()     - 跟踪O_NONBLOCK标志 (F_GETFL/F_SETFL)
 select()    - 多路复用（阻塞在 desd）
 poll()      - 多路复用（阻塞在 desd）
 sleep()     - 休眠（推进虚拟时间）
-close()     - 关闭 socket
+close()     - 关闭 socket (清理FD跟踪标记)
 ```
+
+**BIRD兼容性增强** (新增)：
+- **智能FD跟踪**：维护 `socket_fds[]` 和 `nonblocking_fds[]` 表
+- **read/write转发**：检测socket FD后自动转发到recv/send
+- **非阻塞支持**：recv()检测nonblocking标志，无数据时返回EAGAIN
+- **文件I/O不受影响**：仅拦截AF_INET/AF_INET6的socket操作
 
 ### 3. common.h/c (公共定义)
 
@@ -860,10 +869,15 @@ R1 (Client):
 | connect 拦截 | `connect()` | ~195-280 |
 | accept 拦截 | `accept()` | ~285-370 |
 | send 拦截 | `send()` | ~400-490 |
-| recv 拦截 | `recv()` | ~530-680 |
+| recv 拦截 | `recv()` | ~530-620 |
 | select 拦截 | `select()` | ~730-820 |
-| poll 拦截 | `poll()` | ~830-920 |
-| sleep 拦截 | `sleep()` | ~685-730 |
+| poll 拦截 | `poll()` | ~620-730 |
+| socket 拦截 | `socket()` | ~958-969 |
+| close 拦截 | `close()` | ~833-848 |
+| sleep 拦截 | `sleep()` | ~972-1023 |
+| **fcntl 拦截** | `fcntl()` | **~1026-1070** |
+| **read 拦截** | `read()` | **~1073-1093** |
+| **write 拦截** | `write()` | **~1096-1116** |
 
 ---
 

@@ -1,0 +1,35 @@
+# Build outputs
+build/
+*.o
+*.so
+
+# Log files
+logs/
+# *.log
+*.txt
+
+# Temporary files
+/tmp/desd_control_socket
+/tmp/router_socket
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backup files
+*.old
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test outputs
+r1_*.log
+r2_*.log
+desd_*.log
+*_output.txt
+*_strace.log

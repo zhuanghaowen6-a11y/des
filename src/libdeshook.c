@@ -14,8 +14,14 @@
 #include <jansson.h>    // For JSON handling
 #include <sys/time.h> // For select timeout
 #include <poll.h> // For poll to replace select for better handling of real FDs
+#include <sys/stat.h> // For fstat(), S_ISSOCK()
+#include <fcntl.h> // For fcntl constants
+#include <stdarg.h> // For va_list, va_start, va_end
 
 // --- Global State ---
+#define MAX_TRACKED_FDS 1024
+static int socket_fds[MAX_TRACKED_FDS] = {0}; // 1表示是socket (仅AF_INET/AF_INET6)
+static int nonblocking_fds[MAX_TRACKED_FDS] = {0}; // 1表示设置了O_NONBLOCK
 int my_router_id = -1;
 int desd_control_socket_fd = -1;
 
@@ -32,6 +38,9 @@ static int (*real_unlink)(const char *) = NULL;
 static int (*real_select)(int, fd_set *, fd_set *, fd_set *, struct timeval *) = NULL;
 static int (*real_poll)(struct pollfd *, nfds_t, int) = NULL;
 static unsigned int (*real_sleep)(unsigned int) = NULL;
+static ssize_t (*real_read)(int, void *, size_t) = NULL;
+static ssize_t (*real_write)(int, const void *, size_t) = NULL;
+static int (*real_fcntl)(int, int, ...) = NULL;
 
 void generate_request_id(char* id_buf); // Function prototype for generate_request_id
 
@@ -43,6 +52,9 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);
 unsigned int sleep(unsigned int seconds);
+ssize_t read(int fd, void *buf, size_t count);
+ssize_t write(int fd, const void *buf, size_t count);
+int fcntl(int fd, int cmd, ...);
 
 // Helper function to send message to desd and wait for response
 int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp_msg_out);
@@ -74,9 +86,13 @@ static void lib_init(void) {
     real_select = dlsym(RTLD_NEXT, "select");
     real_poll = dlsym(RTLD_NEXT, "poll");
     real_sleep = dlsym(RTLD_NEXT, "sleep");
+    real_read = dlsym(RTLD_NEXT, "read");
+    real_write = dlsym(RTLD_NEXT, "write");
+    real_fcntl = dlsym(RTLD_NEXT, "fcntl");
 
     if (!real_socket || !real_connect || !real_send || !real_recv || !real_close ||
-        !real_bind || !real_listen || !real_accept || !real_unlink || !real_select || !real_poll || !real_sleep) {
+        !real_bind || !real_listen || !real_accept || !real_unlink || !real_select || 
+        !real_poll || !real_sleep || !real_read || !real_write || !real_fcntl) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Error in dlsym: %s\n", dlerror());
         _exit(1);
     }
@@ -266,6 +282,12 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
                    my_router_id, abstract_address);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             
+            // 标记socket为DES管理
+            if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
+                socket_fds[sockfd] = 1;
+                printf("[LIBDESHOOK] R%d marked fd %d as DES-managed socket (after connect).\n", my_router_id, sockfd);
+            }
+            
             // 2. DESD确认连接建立事件后，调用真实的connect()
             // 注意：客户端不需要发送 CONNECTION_INFO_EVENT，因为：
             // 1. 客户端的 socket_fd 在 CONNECT_REQUEST_EVENT 中已知
@@ -367,6 +389,12 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                 printf("[LIBDESHOOK] R%d notified DESD of new connection fd %d.\n", my_router_id, new_fd);
             } else {
                 fprintf(stderr, "[LIBDESHOOK WARNING] R%d failed to notify DESD of new connection.\n", my_router_id);
+            }
+            
+            // 标记新连接的socket为DES管理
+            if (new_fd >= 0 && new_fd < MAX_TRACKED_FDS) {
+                socket_fds[new_fd] = 1;
+                printf("[LIBDESHOOK] R%d marked accepted fd %d as DES-managed socket.\n", my_router_id, new_fd);
             }
             
             return new_fd;
@@ -517,7 +545,13 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
 
     printf("[LIBDESHOOK] R%d intercepted recv() on sockfd %d, max len %zu.\n", my_router_id, sockfd, len);
 
-    // 直接向desd注册阻塞请求（不再进行非阻塞尝试）
+    // 检查是否为非阻塞socket
+    int is_nonblocking = (sockfd >= 0 && sockfd < MAX_TRACKED_FDS && nonblocking_fds[sockfd]);
+    if (is_nonblocking) {
+        printf("[LIBDESHOOK] R%d recv() on NON-BLOCKING socket fd %d.\n", my_router_id, sockfd);
+    }
+
+    // 向desd注册阻塞请求（如果是非阻塞socket，desd应立即返回状态）
     Message recv_block_req;
     memset(&recv_block_req, 0, sizeof(Message));
     recv_block_req.message_type = HOOK_TO_DESD;
@@ -529,6 +563,7 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
     json_object_set_new(payload_obj, "blocked_function", json_string("RECV_CALL"));
     json_object_set_new(payload_obj, "request_id", json_string(recv_block_req.request_id));
     json_object_set_new(payload_obj, "sockfd", json_integer(sockfd)); // 传递sockfd信息，可能用于desd调度select
+    json_object_set_new(payload_obj, "nonblocking", json_boolean(is_nonblocking)); // 传递非阻塞标志
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     strncpy(recv_block_req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
     recv_block_req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
@@ -582,7 +617,13 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
             if (resp_payload_obj) json_decref(resp_payload_obj);
             errno = EAGAIN; // Resource temporarily unavailable (timeout)
             return -1;
-        }else {
+        } else if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
+                   strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "EAGAIN") == 0) {
+            printf("[LIBDESHOOK] R%d recv() on non-blocking socket, no data available (EAGAIN).\n", my_router_id);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+            errno = EAGAIN; // Resource temporarily unavailable (non-blocking)
+            return -1;
+        } else {
             fprintf(stderr, "[LIBDESHOOK ERROR] R%d recv() failed (DESD rejected or error): %s.\n", my_router_id,
                     resp_payload_obj ? json_string_value(json_object_get(resp_payload_obj, "error_message")) : "Unknown error");
             if (resp_payload_obj) json_decref(resp_payload_obj);
@@ -813,9 +854,20 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
     }
 }
 
-// close - 简单拦截，不与DESD交互
+// close - 简单拦截，不与DESD交互，但需要清理FD跟踪标记
 int close(int sockfd) {
     printf("[LIBDESHOOK] R%d intercepted close() for sockfd %d.\n", my_router_id, sockfd);
+    
+    // 清理FD跟踪标记
+    if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
+        if (socket_fds[sockfd] || nonblocking_fds[sockfd]) {
+            printf("[LIBDESHOOK] R%d clearing tracking for fd %d (socket:%d, nonblocking:%d).\n", 
+                   my_router_id, sockfd, socket_fds[sockfd], nonblocking_fds[sockfd]);
+        }
+        socket_fds[sockfd] = 0;
+        nonblocking_fds[sockfd] = 0;
+    }
+    
     // 理论上可以通知DESD，但对于简单仿真可以忽略
     return real_close(sockfd);
 }
@@ -927,10 +979,17 @@ int unlink(const char *pathname) {
     return real_unlink(pathname);
 }
 
-// socket - 简单拦截，不与DESD交互
+// socket - 简单拦截，不与DESD交互，但需要标记socket FD
 int socket(int domain, int type, int protocol) {
     int fd = real_socket(domain, type, protocol);
-    printf("[LIBDESHOOK] R%d intercepted socket() call. Created fd: %d.\n", my_router_id, fd);
+    printf("[LIBDESHOOK] R%d intercepted socket() call. Created fd: %d, domain: %d.\n", my_router_id, fd, domain);
+    
+    // 标记AF_INET/AF_INET6的socket（需要DES管理）
+    if (fd >= 0 && fd < MAX_TRACKED_FDS && (domain == AF_INET || domain == AF_INET6)) {
+        socket_fds[fd] = 1;
+        printf("[LIBDESHOOK] R%d marked fd %d as DES-managed socket.\n", my_router_id, fd);
+    }
+    
     return fd;
 }
 
@@ -986,4 +1045,97 @@ unsigned int sleep(unsigned int seconds) {
         fprintf(stderr, "[LIBDESHOOK ERROR] R%d sleep() failed: No response from desd.\n", my_router_id);
         return seconds;
     }
+}
+
+// fcntl - 拦截以跟踪非阻塞标志
+int fcntl(int fd, int cmd, ...) {
+    va_list args;
+    va_start(args, cmd);
+    
+    // 对于F_SETFL和F_GETFL，需要特殊处理
+    int result = 0;
+    
+    if (cmd == F_GETFL) {
+        // 获取文件状态标志（不需要参数）
+        result = real_fcntl(fd, cmd);
+        printf("[LIBDESHOOK] R%d fcntl(F_GETFL) on fd %d: flags=0x%x.\n", my_router_id, fd, result);
+    } else if (cmd == F_SETFL) {
+        // 设置文件状态标志（需要int参数）
+        int flags = va_arg(args, int);
+        result = real_fcntl(fd, cmd, flags);
+        
+        printf("[LIBDESHOOK] R%d fcntl(F_SETFL) on fd %d: flags=0x%x.\n", my_router_id, fd, flags);
+        
+        // 跟踪非阻塞标志
+        if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
+            if (flags & O_NONBLOCK) {
+                nonblocking_fds[fd] = 1;
+                printf("[LIBDESHOOK] R%d marked fd %d as NON-BLOCKING.\n", my_router_id, fd);
+            } else {
+                nonblocking_fds[fd] = 0;
+                printf("[LIBDESHOOK] R%d marked fd %d as BLOCKING.\n", my_router_id, fd);
+            }
+        }
+    } else if (cmd == F_SETFD || cmd == F_GETFD) {
+        // F_SETFD需要int参数，F_GETFD不需要
+        if (cmd == F_SETFD) {
+            int flags = va_arg(args, int);
+            result = real_fcntl(fd, cmd, flags);
+        } else {
+            result = real_fcntl(fd, cmd);
+        }
+    } else {
+        // 其他fcntl命令，假设需要一个long参数（最常见情况）
+        long arg = va_arg(args, long);
+        result = real_fcntl(fd, cmd, arg);
+    }
+    
+    va_end(args);
+    return result;
+}
+
+// read - 拦截并转发socket读取到recv()
+ssize_t read(int fd, void *buf, size_t count) {
+    // 1. desd控制socket：不拦截
+    if (fd == desd_control_socket_fd) {
+        return real_read(fd, buf, count);
+    }
+    
+    // 2. 未初始化DES：不拦截
+    if (desd_control_socket_fd == -1) {
+        return real_read(fd, buf, count);
+    }
+    
+    // 3. 检查是否是DES管理的socket
+    if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
+        // 这是DES管理的socket，转发到recv()
+        printf("[LIBDESHOOK] R%d read() on socket fd=%d, forwarding to recv().\n", my_router_id, fd);
+        return recv(fd, buf, count, 0);
+    }
+    
+    // 4. 普通文件或其他FD：不拦截
+    return real_read(fd, buf, count);
+}
+
+// write - 拦截并转发socket写入到send()
+ssize_t write(int fd, const void *buf, size_t count) {
+    // 1. desd控制socket：不拦截
+    if (fd == desd_control_socket_fd) {
+        return real_write(fd, buf, count);
+    }
+    
+    // 2. 未初始化DES：不拦截
+    if (desd_control_socket_fd == -1) {
+        return real_write(fd, buf, count);
+    }
+    
+    // 3. 检查是否是DES管理的socket
+    if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
+        // 这是DES管理的socket，转发到send()
+        printf("[LIBDESHOOK] R%d write() on socket fd=%d, forwarding to send().\n", my_router_id, fd);
+        return send(fd, buf, count, 0);
+    }
+    
+    // 4. 普通文件或其他FD：不拦截
+    return real_write(fd, buf, count);
 }

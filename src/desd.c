@@ -111,6 +111,7 @@ void handle_timeout_event(Event event);
 void send_success_response(int router_id, const char* request_id, const char* blocked_func, const char* message, const char* connection_id_str);
 void send_error_response(int router_id, const char* request_id, const char* error_msg);
 void send_timeout_response(int router_id, const char* request_id, const char* timeout_type);
+void send_eagain_response(int router_id, const char* request_id);
 
 // Connection management helper functions
 int find_router_by_listen_address(const char *address);
@@ -1100,6 +1101,13 @@ void handle_router_block_request(Event event) {
     strncpy(blocked_func_str_local, blocked_func_ptr, 63);
     blocked_func_str_local[63] = '\0';
 
+    // 解析 nonblocking 标志（用于 RECV_CALL）
+    int is_nonblocking = 0;
+    json_t *nonblocking_obj = json_object_get(payload_obj, "nonblocking");
+    if (nonblocking_obj && json_is_boolean(nonblocking_obj)) {
+        is_nonblocking = json_boolean_value(nonblocking_obj);
+    }
+
     json_decref(payload_obj);
 
     if (router_id > 0 && router_id <= MAX_ROUTERS) {
@@ -1148,14 +1156,22 @@ void handle_router_block_request(Event event) {
                 printf("[DESD] R%d recv() immediately unblocked (had %d pending packet(s)).\n", 
                        router_id, router_states[router_id].pending_packets_count + 1);
             } else {
-                // 数据还没到达，保持阻塞
-                router_states[router_id].status = BLOCKED;
-                strncpy(router_states[router_id].blocked_on_request_id, request_id_local, 63);
-                router_states[router_id].blocked_on_request_id[63] = '\0';
-                strncpy(router_states[router_id].blocked_on_function, blocked_func_str_local, 63);
-                router_states[router_id].blocked_on_function[63] = '\0';
-                printf("[DESD] R%d blocked on %s (ReqID: %s) - no pending packets.\n",
-                       router_id, blocked_func_str_local, request_id_local);
+                // 数据还没到达
+                if (is_nonblocking) {
+                    // 非阻塞模式：立即返回 EAGAIN
+                    router_states[router_id].status = RUNNING;
+                    send_eagain_response(router_id, request_id_local);
+                    printf("[DESD] R%d recv() on non-blocking socket, no data available, returning EAGAIN.\n", router_id);
+                } else {
+                    // 阻塞模式：保持阻塞
+                    router_states[router_id].status = BLOCKED;
+                    strncpy(router_states[router_id].blocked_on_request_id, request_id_local, 63);
+                    router_states[router_id].blocked_on_request_id[63] = '\0';
+                    strncpy(router_states[router_id].blocked_on_function, blocked_func_str_local, 63);
+                    router_states[router_id].blocked_on_function[63] = '\0';
+                    printf("[DESD] R%d blocked on %s (ReqID: %s) - no pending packets.\n",
+                           router_id, blocked_func_str_local, request_id_local);
+                }
             }
         } else if (strcmp(blocked_func_str_local, "ACCEPT_CALL") == 0) {
             // 特殊处理 ACCEPT_CALL：检查是否有 pending 连接
@@ -1759,6 +1775,28 @@ void send_error_response(int router_id, const char* request_id, const char* erro
     json_t *payload_obj = json_object();
     json_object_set_new(payload_obj, "status", json_string("ERROR"));
     json_object_set_new(payload_obj, "error_message", json_string(error_msg));
+    char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
+    json_decref(payload_obj);
+
+    Message response = {
+        .message_type = DESD_TO_HOOK,
+        .router_id = router_id,
+        .request_id = "",
+        .virtual_time = current_virtual_time
+    };
+    strncpy(response.request_id, request_id, 63);
+    response.request_id[63] = '\0';
+    strncpy(response.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+    response.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+    free(payload_str);
+    send_message_to_router(router_id, &response);
+}
+
+void send_eagain_response(int router_id, const char* request_id) {
+    json_t *payload_obj = json_object();
+    json_object_set_new(payload_obj, "status", json_string("EAGAIN"));
+    json_object_set_new(payload_obj, "blocked_function", json_string("RECV"));
+    json_object_set_new(payload_obj, "message", json_string("No data available (non-blocking)"));
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     json_decref(payload_obj);
 

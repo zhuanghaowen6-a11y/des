@@ -1,0 +1,417 @@
+717   execve("/usr/sbin/bird", ["bird", "-d", "-c", "/etc/bird/bird.conf"], 0x7ffd78777ea0 /* 8 vars */) = 0
+717   brk(NULL)                         = 0x56176872d000
+717   mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90c0126000
+717   access("/etc/ld.so.preload", R_OK) = -1 ENOENT (No such file or directory)
+717   openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=6135, ...}) = 0
+717   mmap(NULL, 6135, PROT_READ, MAP_PRIVATE, 3, 0) = 0x7f90c0124000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libssh-gcrypt.so.4", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=572856, ...}) = 0
+717   mmap(NULL, 574904, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90c0097000
+717   mmap(0x7f90c00a3000, 307200, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0xc000) = 0x7f90c00a3000
+717   mmap(0x7f90c00ee000, 204800, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x57000) = 0x7f90c00ee000
+717   mmap(0x7f90c0120000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x88000) = 0x7f90c0120000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   pread64(3, "\6\0\0\0\4\0\0\0@\0\0\0\0\0\0\0@\0\0\0"..., 784, 64) = 784
+717   fstat(3, {st_mode=S_IFREG|0755, st_size=2125328, ...}) = 0
+717   pread64(3, "\6\0\0\0\4\0\0\0@\0\0\0\0\0\0\0@\0\0\0"..., 784, 64) = 784
+717   mmap(NULL, 2170256, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfe85000
+717   mmap(0x7f90bfead000, 1605632, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x28000) = 0x7f90bfead000
+717   mmap(0x7f90c0035000, 323584, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1b0000) = 0x7f90c0035000
+717   mmap(0x7f90c0084000, 24576, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1fe000) = 0x7f90c0084000
+717   mmap(0x7f90c008a000, 52624, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x7f90c008a000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libgcrypt.so.20", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=1340976, ...}) = 0
+717   mmap(NULL, 1340272, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfd3d000
+717   mmap(0x7f90bfd4c000, 999424, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0xf000) = 0x7f90bfd4c000
+717   mmap(0x7f90bfe40000, 241664, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x103000) = 0x7f90bfe40000
+717   mmap(0x7f90bfe7b000, 36864, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x13e000) = 0x7f90bfe7b000
+717   mmap(0x7f90bfe84000, 880, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x7f90bfe84000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libgpg-error.so.0", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=149760, ...}) = 0
+717   mmap(NULL, 147880, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfd18000
+717   mmap(0x7f90bfd1c000, 90112, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x4000) = 0x7f90bfd1c000
+717   mmap(0x7f90bfd32000, 36864, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1a000) = 0x7f90bfd32000
+717   mmap(0x7f90bfd3b000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x23000) = 0x7f90bfd3b000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libz.so.1", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=113000, ...}) = 0
+717   mmap(NULL, 110744, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfcfc000
+717   mmap(0x7f90bfcfe000, 73728, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x2000) = 0x7f90bfcfe000
+717   mmap(0x7f90bfd10000, 24576, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x14000) = 0x7f90bfd10000
+717   mmap(0x7f90bfd16000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1a000) = 0x7f90bfd16000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libgssapi_krb5.so.2", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=338696, ...}) = 0
+717   mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfcfa000
+717   mmap(NULL, 341080, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfca6000
+717   mmap(0x7f90bfcb2000, 237568, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0xc000) = 0x7f90bfcb2000
+717   mmap(0x7f90bfcec000, 40960, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x46000) = 0x7f90bfcec000
+717   mmap(0x7f90bfcf6000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x4f000) = 0x7f90bfcf6000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libkrb5.so.3", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=823488, ...}) = 0
+717   mmap(NULL, 822032, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfbdd000
+717   mmap(0x7f90bfbfd000, 397312, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x20000) = 0x7f90bfbfd000
+717   mmap(0x7f90bfc5e000, 233472, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x81000) = 0x7f90bfc5e000
+717   mmap(0x7f90bfc97000, 61440, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0xba000) = 0x7f90bfc97000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libk5crypto.so.3", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=178648, ...}) = 0
+717   mmap(NULL, 176392, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfbb1000
+717   mmap(0x7f90bfbb5000, 110592, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x4000) = 0x7f90bfbb5000
+717   mmap(0x7f90bfbd0000, 45056, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1f000) = 0x7f90bfbd0000
+717   mmap(0x7f90bfbdb000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x2a000) = 0x7f90bfbdb000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libcom_err.so.2", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=18504, ...}) = 0
+717   mmap(NULL, 20552, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfbab000
+717   mmap(0x7f90bfbad000, 4096, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x2000) = 0x7f90bfbad000
+717   mmap(0x7f90bfbae000, 4096, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x3000) = 0x7f90bfbae000
+717   mmap(0x7f90bfbaf000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x3000) = 0x7f90bfbaf000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libkrb5support.so.0", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=47904, ...}) = 0
+717   mmap(NULL, 50128, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfb9e000
+717   mmap(0x7f90bfba1000, 24576, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x3000) = 0x7f90bfba1000
+717   mmap(0x7f90bfba7000, 8192, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x9000) = 0x7f90bfba7000
+717   mmap(0x7f90bfba9000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0xa000) = 0x7f90bfba9000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libkeyutils.so.1", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=22600, ...}) = 0
+717   mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb9c000
+717   mmap(NULL, 24592, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfb95000
+717   mmap(0x7f90bfb97000, 8192, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x2000) = 0x7f90bfb97000
+717   mmap(0x7f90bfb99000, 4096, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x4000) = 0x7f90bfb99000
+717   mmap(0x7f90bfb9a000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x4000) = 0x7f90bfb9a000
+717   close(3)                          = 0
+717   openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libresolv.so.2", O_RDONLY|O_CLOEXEC) = 3
+717   read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0"..., 832) = 832
+717   fstat(3, {st_mode=S_IFREG|0644, st_size=68104, ...}) = 0
+717   mmap(NULL, 75912, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f90bfb82000
+717   mmap(0x7f90bfb85000, 40960, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x3000) = 0x7f90bfb85000
+717   mmap(0x7f90bfb8f000, 8192, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0xd000) = 0x7f90bfb8f000
+717   mmap(0x7f90bfb91000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0xf000) = 0x7f90bfb91000
+717   mmap(0x7f90bfb93000, 6280, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb93000
+717   close(3)                          = 0
+717   mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb80000
+717   mmap(NULL, 208896, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb4d000
+717   arch_prctl(ARCH_SET_FS, 0x7f90bfb7d7c0) = 0
+717   set_tid_address(0x7f90bfb7da90)   = 717
+717   set_robust_list(0x7f90bfb7daa0, 24) = 0
+717   rseq(0x7f90bfb7e0e0, 0x20, 0, 0x53053053) = 0
+717   mprotect(0x7f90c0084000, 16384, PROT_READ) = 0
+717   mprotect(0x7f90bfb91000, 4096, PROT_READ) = 0
+717   mprotect(0x7f90bfb9a000, 4096, PROT_READ) = 0
+717   mprotect(0x7f90bfba9000, 4096, PROT_READ) = 0
+717   mprotect(0x7f90bfbaf000, 4096, PROT_READ) = 0
+717   mprotect(0x7f90bfbdb000, 4096, PROT_READ) = 0
+717   mprotect(0x7f90bfc97000, 53248, PROT_READ) = 0
+717   mprotect(0x7f90bfcf6000, 8192, PROT_READ) = 0
+717   mprotect(0x7f90bfd16000, 4096, PROT_READ) = 0
+717   mprotect(0x7f90bfd3b000, 4096, PROT_READ) = 0
+717   mprotect(0x7f90bfe7b000, 20480, PROT_READ) = 0
+717   mprotect(0x7f90c0120000, 8192, PROT_READ) = 0
+717   mprotect(0x5617486f4000, 40960, PROT_READ) = 0
+717   mprotect(0x7f90c015e000, 8192, PROT_READ) = 0
+717   prlimit64(0, RLIMIT_STACK, NULL, {rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}) = 0
+717   munmap(0x7f90c0124000, 6135)      = 0
+717   getrandom("\x74\x76\x6f\x5e\x6e\x8b\x3b\xfc", 8, GRND_NONBLOCK) = 8
+717   brk(NULL)                         = 0x56176872d000
+717   brk(0x56176874e000)               = 0x56176874e000
+717   access("/etc/gcrypt/fips_enabled", F_OK) = -1 ENOENT (No such file or directory)
+717   openat(AT_FDCWD, "/proc/sys/crypto/fips_enabled", O_RDONLY) = -1 ENOENT (No such file or directory)
+717   openat(AT_FDCWD, "/etc/gcrypt/hwf.deny", O_RDONLY) = -1 ENOENT (No such file or directory)
+717   mmap(NULL, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb49000
+717   getuid()                          = 0
+717   mlock(0x7f90bfb49000, 16384)      = 0
+717   getrandom("\x3b\xaf\x40\xc5", 4, 0) = 4
+717   prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0) = 0
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90c0125000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90c0124000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb48000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb47000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb46000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb45000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb44000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb43000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb42000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb41000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb40000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb3f000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb3e000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb3d000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb3c000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb3b000
+717   socket(AF_UNIX, SOCK_STREAM, 0)   = 3
+717   connect(3, {sa_family=AF_UNIX, sun_path="/run/bird/bird.ctl"}, 20) = -1 ECONNREFUSED (Connection refused)
+717   close(3)                          = 0
+717   unlink("/run/bird/bird.ctl")      = 0
+717   socket(AF_UNIX, SOCK_STREAM, 0)   = 3
+717   fcntl(3, F_SETFL, O_RDONLY|O_NONBLOCK) = 0
+717   bind(3, {sa_family=AF_UNIX, sun_path="/run/bird/bird.ctl"}, 20) = 0
+717   listen(3, 8)                      = 0
+717   chmod("/run/bird/bird.ctl", 0660) = 0
+717   openat(AT_FDCWD, "/etc/bird/bird.conf", O_RDONLY) = 4
+717   openat(AT_FDCWD, "/etc/iproute2/rt_protos", O_RDONLY) = 5
+717   fstat(5, {st_mode=S_IFREG|0644, st_size=219, ...}) = 0
+717   read(5, "#\n# Reserved protoco"..., 4096) = 219
+717   read(5, "", 4096)                 = 0
+717   close(5)                          = 0
+717   openat(AT_FDCWD, "/etc/iproute2/rt_realms", O_RDONLY) = 5
+717   fstat(5, {st_mode=S_IFREG|0644, st_size=112, ...}) = 0
+717   read(5, "#\n# reserved values\n"..., 4096) = 112
+717   read(5, "", 4096)                 = 0
+717   close(5)                          = 0
+717   openat(AT_FDCWD, "/etc/iproute2/rt_scopes", O_RDONLY) = 5
+717   fstat(5, {st_mode=S_IFREG|0644, st_size=92, ...}) = 0
+717   read(5, "#\n# reserved values\n"..., 4096) = 92
+717   read(5, "", 4096)                 = 0
+717   close(5)                          = 0
+717   openat(AT_FDCWD, "/etc/iproute2/rt_tables", O_RDONLY) = 5
+717   fstat(5, {st_mode=S_IFREG|0644, st_size=87, ...}) = 0
+717   read(5, "#\n# reserved values\n"..., 4096) = 87
+717   read(5, "", 4096)                 = 0
+717   close(5)                          = 0
+717   read(4, "router id 1.1.1.1;\n\n"..., 8192) = 265
+717   read(4, "", 8192)                 = 0
+717   close(4)                          = 0
+717   rt_sigaction(SIGUSR1, {sa_handler=0x561748665e70, sa_mask=[], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f90bfeca330}, NULL, 8) = 0
+717   rt_sigaction(SIGHUP, {sa_handler=0x561748665e60, sa_mask=[], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f90bfeca330}, NULL, 8) = 0
+717   rt_sigaction(SIGTERM, {sa_handler=0x561748665e80, sa_mask=[], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f90bfeca330}, NULL, 8) = 0
+717   rt_sigaction(SIGALRM, {sa_handler=0x56174866f050, sa_mask=[], sa_flags=SA_RESTORER, sa_restorer=0x7f90bfeca330}, NULL, 8) = 0
+717   rt_sigaction(SIGPIPE, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f90bfeca330}, {sa_handler=SIG_DFL, sa_mask=[], sa_flags=0}, 8) = 0
+717   uname({sysname="Linux", nodename="2a25a0eef052", ...}) = 0
+717   socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE) = 4
+717   socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE) = 5
+717   setsockopt(4, SOL_NETLINK, NETLINK_GET_STRICT_CHK, [1], 4) = 0
+717   socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE) = 6
+717   bind(6, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=0x000551}, 12) = 0
+717   brk(0x561768774000)               = 0x561768774000
+717   fcntl(6, F_SETFL, O_RDONLY|O_NONBLOCK) = 0
+717   sendto(4, [{nlmsg_len=32, nlmsg_type=0x12 /* NLMSG_??? */, nlmsg_flags=NLM_F_REQUEST|0x300, nlmsg_seq=111682, nlmsg_pid=0}, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"], 32, 0, NULL, 0) = 32
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=1348, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111682, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_LOOPBACK, ifi_index=if_nametoindex("lo"), ifi_flags=IFF_UP|IFF_LOOPBACK|IFF_RUNNING|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=7, nla_type=IFLA_IFNAME}, "lo"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 1000], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 0], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 65536], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 0], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 0], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 1], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 1], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 0], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]], [{nlmsg_len=1384, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111682, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_ETHER, ifi_index=if_nametoindex("eth0"), ifi_flags=IFF_UP|IFF_BROADCAST|IFF_RUNNING|IFF_MULTICAST|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=9, nla_type=IFLA_IFNAME}, "eth0"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 0], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 6], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 1500], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 68], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 65535], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 128], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 128], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 2], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 1], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 1], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 2732
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111682, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111683, nlmsg_pid=0}, {ifa_family=AF_INET, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=76, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111683, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=8, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("127.0.0.1")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("127.0.0.1")], [{nla_len=7, nla_type=IFA_LABEL}, "lo"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}]]], [{nlmsg_len=88, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111683, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=16, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=if_nametoindex("eth0")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_BROADCAST}, inet_addr("172.18.255.255")], [{nla_len=9, nla_type=IFA_LABEL}, "eth0"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816456, tstamp=10816456}]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 164
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111683, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111684, nlmsg_pid=0}, {ifa_family=AF_INET6, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=72, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111684, nlmsg_pid=-473794963}, {ifa_family=AF_INET6, ifa_prefixlen=128, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=20, nla_type=IFA_ADDRESS}, inet_pton(AF_INET6, "::1")], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 72
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111684, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   write(2, "bird: ", 6)             = 6
+717   write(2, "Started", 7)            = 7
+717   write(2, "\n", 1)                 = 1
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb3a000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb39000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb38000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb37000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb36000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb35000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb34000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb33000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb32000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb31000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb30000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb2f000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb2e000
+717   mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f90bfb2d000
+717   socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 7
+717   fcntl(7, F_SETFL, O_RDONLY|O_NONBLOCK) = 0
+717   setsockopt(7, SOL_IP, IP_TTL, [255], 4) = 0
+717   setsockopt(7, SOL_IP, IP_TOS, [192], 4) = 0
+717   setsockopt(7, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+717   bind(7, {sa_family=AF_INET, sin_port=htons(179), sin_addr=inet_addr("0.0.0.0")}, 32) = 0
+717   listen(7, 8)                      = 0
+717   sendto(4, [{nlmsg_len=28, nlmsg_type=RTM_GETROUTE, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111685, nlmsg_pid=0}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_UNSPEC, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNSPEC, rtm_flags=0}], 28, 0, NULL, 0) = 28
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=52, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111685, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BOOT, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_GATEWAY}, inet_addr("172.18.0.1")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111685, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_KERNEL, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PREFSRC}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111685, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BIRD, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PRIORITY}, 32], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 172
+717   sendto(5, [{nlmsg_len=52, nlmsg_type=0x18 /* NLMSG_??? */, nlmsg_flags=NLM_F_REQUEST|NLM_F_ACK|0x500, nlmsg_seq=111682, nlmsg_pid=0}, "\x02\x10\x00\x00\xfe\x0c\xfd\x01\x00\x00\x00\x00\x08\x00\x01\x00\xac\x12\x00\x00"...], 52, 0, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, 12) = 52
+717   recvmsg(5, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=36, nlmsg_type=NLMSG_ERROR, nlmsg_flags=NLM_F_CAPPED, nlmsg_seq=111682, nlmsg_pid=-456607174}, {error=0, msg={nlmsg_len=52, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_REQUEST|NLM_F_ACK|NLM_F_REPLACE|NLM_F_CREATE, nlmsg_seq=111682, nlmsg_pid=0}}], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 36
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111685, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}], 3, 3000) = 1 ([{fd=7, revents=POLLIN}])
+717   accept(7, {sa_family=AF_INET, sin_port=htons(58673), sin_addr=inet_addr("172.18.0.3")}, [32 => 16]) = 8
+717   getsockname(8, {sa_family=AF_INET, sin_port=htons(179), sin_addr=inet_addr("172.18.0.2")}, [32 => 16]) = 0
+717   fcntl(8, F_SETFL, O_RDONLY|O_NONBLOCK) = 0
+717   setsockopt(8, SOL_IP, IP_TTL, [255], 4) = 0
+717   setsockopt(8, SOL_IP, IP_TOS, [192], 4) = 0
+717   setsockopt(8, SOL_IP, IP_TTL, [1], 4) = 0
+717   write(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0005\1\4"..., 53) = 53
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 2289) = 1 ([{fd=8, revents=POLLIN}])
+717   read(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0005\1\4"..., 4096) = 53
+717   read(8, 0x561768755e00, 4096)     = -1 EAGAIN (Resource temporarily unavailable)
+717   write(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0\23\4", 19) = 19
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 1 ([{fd=8, revents=POLLIN}])
+717   read(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0\23\4", 4096) = 19
+717   read(8, 0x561768755e00, 4096)     = -1 EAGAIN (Resource temporarily unavailable)
+717   read(8, 0x561768755e00, 4096)     = -1 EAGAIN (Resource temporarily unavailable)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 0) = 0 (Timeout)
+717   write(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0.\2\0"..., 46) = 46
+717   write(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0\27\2\0"..., 23) = 23
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 1 ([{fd=8, revents=POLLIN}])
+717   read(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0.\2\0"..., 4096) = 69
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 836) = 0 (Timeout)
+717   sendto(4, [{nlmsg_len=32, nlmsg_type=RTM_GETLINK, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111686, nlmsg_pid=0}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_NETROM, ifi_index=0, ifi_flags=0, ifi_change=0}], 32, 0, NULL, 0) = 32
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=1348, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111686, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_LOOPBACK, ifi_index=if_nametoindex("lo"), ifi_flags=IFF_UP|IFF_LOOPBACK|IFF_RUNNING|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=7, nla_type=IFLA_IFNAME}, "lo"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 1000], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 0], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 65536], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 0], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 0], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 1], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 1], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 0], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]], [{nlmsg_len=1384, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111686, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_ETHER, ifi_index=if_nametoindex("eth0"), ifi_flags=IFF_UP|IFF_BROADCAST|IFF_RUNNING|IFF_MULTICAST|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=9, nla_type=IFLA_IFNAME}, "eth0"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 0], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 6], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 1500], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 68], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 65535], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 128], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 128], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 2], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 1], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 1], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 2732
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111686, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111687, nlmsg_pid=0}, {ifa_family=AF_INET, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=76, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111687, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=8, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("127.0.0.1")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("127.0.0.1")], [{nla_len=7, nla_type=IFA_LABEL}, "lo"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}]]], [{nlmsg_len=88, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111687, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=16, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=if_nametoindex("eth0")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_BROADCAST}, inet_addr("172.18.255.255")], [{nla_len=9, nla_type=IFA_LABEL}, "eth0"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816456, tstamp=10816456}]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 164
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111687, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111688, nlmsg_pid=0}, {ifa_family=AF_INET6, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=72, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111688, nlmsg_pid=-473794963}, {ifa_family=AF_INET6, ifa_prefixlen=128, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=20, nla_type=IFA_ADDRESS}, inet_pton(AF_INET6, "::1")], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 72
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111688, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=28, nlmsg_type=RTM_GETROUTE, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111689, nlmsg_pid=0}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_UNSPEC, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNSPEC, rtm_flags=0}], 28, 0, NULL, 0) = 28
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=52, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111689, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BOOT, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_GATEWAY}, inet_addr("172.18.0.1")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111689, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_KERNEL, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PREFSRC}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111689, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BIRD, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PRIORITY}, 32], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 172
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111689, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 432) = 0 (Timeout)
+717   write(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0\23\4", 19) = 19
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 1 ([{fd=8, revents=POLLIN}])
+717   read(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0\23\4", 4096) = 19
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 434) = 0 (Timeout)
+717   sendto(4, [{nlmsg_len=32, nlmsg_type=RTM_GETLINK, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111690, nlmsg_pid=0}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_NETROM, ifi_index=0, ifi_flags=0, ifi_change=0}], 32, 0, NULL, 0) = 32
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=1348, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111690, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_LOOPBACK, ifi_index=if_nametoindex("lo"), ifi_flags=IFF_UP|IFF_LOOPBACK|IFF_RUNNING|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=7, nla_type=IFLA_IFNAME}, "lo"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 1000], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 0], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 65536], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 0], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 0], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 1], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 1], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 0], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]], [{nlmsg_len=1384, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111690, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_ETHER, ifi_index=if_nametoindex("eth0"), ifi_flags=IFF_UP|IFF_BROADCAST|IFF_RUNNING|IFF_MULTICAST|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=9, nla_type=IFLA_IFNAME}, "eth0"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 0], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 6], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 1500], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 68], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 65535], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 128], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 128], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 2], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 1], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 1], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 2732
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111690, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111691, nlmsg_pid=0}, {ifa_family=AF_INET, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=76, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111691, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=8, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("127.0.0.1")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("127.0.0.1")], [{nla_len=7, nla_type=IFA_LABEL}, "lo"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}]]], [{nlmsg_len=88, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111691, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=16, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=if_nametoindex("eth0")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_BROADCAST}, inet_addr("172.18.255.255")], [{nla_len=9, nla_type=IFA_LABEL}, "eth0"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816456, tstamp=10816456}]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 164
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111691, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111692, nlmsg_pid=0}, {ifa_family=AF_INET6, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=72, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111692, nlmsg_pid=-473794963}, {ifa_family=AF_INET6, ifa_prefixlen=128, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=20, nla_type=IFA_ADDRESS}, inet_pton(AF_INET6, "::1")], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 72
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111692, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=28, nlmsg_type=RTM_GETROUTE, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111693, nlmsg_pid=0}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_UNSPEC, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNSPEC, rtm_flags=0}], 28, 0, NULL, 0) = 28
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=52, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111693, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BOOT, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_GATEWAY}, inet_addr("172.18.0.1")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111693, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_KERNEL, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PREFSRC}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111693, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BIRD, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PRIORITY}, 32], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 172
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111693, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 2934) = 0 (Timeout)
+717   write(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0\23\4", 19) = 19
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 1 ([{fd=8, revents=POLLIN}])
+717   read(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0\23\4", 4096) = 19
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 1346) = 0 (Timeout)
+717   sendto(4, [{nlmsg_len=32, nlmsg_type=RTM_GETLINK, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111694, nlmsg_pid=0}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_NETROM, ifi_index=0, ifi_flags=0, ifi_change=0}], 32, 0, NULL, 0) = 32
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=1348, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111694, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_LOOPBACK, ifi_index=if_nametoindex("lo"), ifi_flags=IFF_UP|IFF_LOOPBACK|IFF_RUNNING|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=7, nla_type=IFLA_IFNAME}, "lo"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 1000], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 0], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 65536], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 0], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 0], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 1], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 1], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 0], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]], [{nlmsg_len=1384, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111694, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_ETHER, ifi_index=if_nametoindex("eth0"), ifi_flags=IFF_UP|IFF_BROADCAST|IFF_RUNNING|IFF_MULTICAST|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=9, nla_type=IFLA_IFNAME}, "eth0"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 0], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 6], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 1500], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 68], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 65535], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 128], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 128], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 2], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 1], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 1], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 2732
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111694, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111695, nlmsg_pid=0}, {ifa_family=AF_INET, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=76, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111695, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=8, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("127.0.0.1")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("127.0.0.1")], [{nla_len=7, nla_type=IFA_LABEL}, "lo"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}]]], [{nlmsg_len=88, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111695, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=16, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=if_nametoindex("eth0")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_BROADCAST}, inet_addr("172.18.255.255")], [{nla_len=9, nla_type=IFA_LABEL}, "eth0"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816456, tstamp=10816456}]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 164
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111695, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111696, nlmsg_pid=0}, {ifa_family=AF_INET6, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=72, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111696, nlmsg_pid=-473794963}, {ifa_family=AF_INET6, ifa_prefixlen=128, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=20, nla_type=IFA_ADDRESS}, inet_pton(AF_INET6, "::1")], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 72
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111696, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=28, nlmsg_type=RTM_GETROUTE, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111697, nlmsg_pid=0}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_UNSPEC, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNSPEC, rtm_flags=0}], 28, 0, NULL, 0) = 28
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=52, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111697, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BOOT, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_GATEWAY}, inet_addr("172.18.0.1")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111697, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_KERNEL, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PREFSRC}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111697, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BIRD, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PRIORITY}, 32], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 172
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111697, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 1339) = 0 (Timeout)
+717   write(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0\23\4", 19) = 19
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 1 ([{fd=8, revents=POLLIN}])
+717   read(8, "\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\0\23\4", 4096) = 19
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 704) = 0 (Timeout)
+717   sendto(4, [{nlmsg_len=32, nlmsg_type=RTM_GETLINK, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111698, nlmsg_pid=0}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_NETROM, ifi_index=0, ifi_flags=0, ifi_change=0}], 32, 0, NULL, 0) = 32
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=1348, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111698, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_LOOPBACK, ifi_index=if_nametoindex("lo"), ifi_flags=IFF_UP|IFF_LOOPBACK|IFF_RUNNING|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=7, nla_type=IFLA_IFNAME}, "lo"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 1000], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 0], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 65536], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 0], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 0], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 1], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 1], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 0], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 0], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]], [{nlmsg_len=1384, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111698, nlmsg_pid=-473794963}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_ETHER, ifi_index=if_nametoindex("eth0"), ifi_flags=IFF_UP|IFF_BROADCAST|IFF_RUNNING|IFF_MULTICAST|IFF_LOWER_UP, ifi_change=0}, [[{nla_len=9, nla_type=IFLA_IFNAME}, "eth0"], [{nla_len=8, nla_type=IFLA_TXQLEN}, 0], [{nla_len=5, nla_type=IFLA_OPERSTATE}, 6], [{nla_len=5, nla_type=IFLA_LINKMODE}, 0], [{nla_len=8, nla_type=IFLA_MTU}, 1500], [{nla_len=8, nla_type=IFLA_MIN_MTU}, 68], [{nla_len=8, nla_type=IFLA_MAX_MTU}, 65535], [{nla_len=8, nla_type=IFLA_GROUP}, 0], [{nla_len=8, nla_type=IFLA_PROMISCUITY}, 0], [{nla_len=8, nla_type=IFLA_NUM_TX_QUEUES}, 128], [{nla_len=8, nla_type=IFLA_GSO_MAX_SEGS}, 65535], [{nla_len=8, nla_type=IFLA_GSO_MAX_SIZE}, 65536], [{nla_len=8, nla_type=IFLA_NUM_RX_QUEUES}, 128], [{nla_len=5, nla_type=IFLA_CARRIER}, 1], [{nla_len=12, nla_type=IFLA_QDISC}, "noqueue"], [{nla_len=8, nla_type=IFLA_CARRIER_CHANGES}, 2], [{nla_len=8, nla_type=IFLA_CARRIER_UP_COUNT}, 1], [{nla_len=8, nla_type=IFLA_CARRIER_DOWN_COUNT}, 1], [{nla_len=5, nla_type=IFLA_PROTO_DOWN}, 0], [{nla_len=36, nla_type=IFLA_MAP}, {mem_start=0, mem_end=0, base_addr=0, irq=0, dma=0, port=0}], ...]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 2732
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111698, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111699, nlmsg_pid=0}, {ifa_family=AF_INET, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=76, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111699, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=8, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("127.0.0.1")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("127.0.0.1")], [{nla_len=7, nla_type=IFA_LABEL}, "lo"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}]]], [{nlmsg_len=88, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111699, nlmsg_pid=-473794963}, {ifa_family=AF_INET, ifa_prefixlen=16, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=if_nametoindex("eth0")}, [[{nla_len=8, nla_type=IFA_ADDRESS}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_LOCAL}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=IFA_BROADCAST}, inet_addr("172.18.255.255")], [{nla_len=9, nla_type=IFA_LABEL}, "eth0"], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816456, tstamp=10816456}]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 164
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111699, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   sendto(4, [{nlmsg_len=24, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111700, nlmsg_pid=0}, {ifa_family=AF_INET6, ifa_prefixlen=0, ifa_flags=0, ifa_scope=RT_SCOPE_UNIVERSE, ifa_index=0}], 24, 0, NULL, 0) = 24
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=72, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111700, nlmsg_pid=-473794963}, {ifa_family=AF_INET6, ifa_prefixlen=128, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=20, nla_type=IFA_ADDRESS}, inet_pton(AF_INET6, "::1")], [{nla_len=20, nla_type=IFA_CACHEINFO}, {ifa_prefered=4294967295, ifa_valid=4294967295, cstamp=10816444, tstamp=10816444}], [{nla_len=8, nla_type=IFA_FLAGS}, IFA_F_PERMANENT]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 72
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=111700, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 1) = 0 (Timeout)
+717   sendto(4, [{nlmsg_len=28, nlmsg_type=RTM_GETROUTE, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=111701, nlmsg_pid=0}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_UNSPEC, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNSPEC, rtm_flags=0}], 28, 0, NULL, 0) = 28
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=52, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111701, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=0, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BOOT, rtm_scope=RT_SCOPE_UNIVERSE, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_GATEWAY}, inet_addr("172.18.0.1")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111701, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_KERNEL, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PREFSRC}, inet_addr("172.18.0.2")], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]], [{nlmsg_len=60, nlmsg_type=RTM_NEWROUTE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111701, nlmsg_pid=-473794963}, {rtm_family=AF_INET, rtm_dst_len=16, rtm_src_len=0, rtm_tos=0, rtm_table=RT_TABLE_MAIN, rtm_protocol=RTPROT_BIRD, rtm_scope=RT_SCOPE_LINK, rtm_type=RTN_UNICAST, rtm_flags=0}, [[{nla_len=8, nla_type=RTA_TABLE}, RT_TABLE_MAIN], [{nla_len=8, nla_type=RTA_DST}, inet_addr("172.18.0.0")], [{nla_len=8, nla_type=RTA_PRIORITY}, 32], [{nla_len=8, nla_type=RTA_OIF}, if_nametoindex("eth0")]]]], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 172
+717   recvmsg(4, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[{nlmsg_len=20, nlmsg_type=NLMSG_DONE, nlmsg_flags=NLM_F_MULTI|NLM_F_DUMP_FILTERED, nlmsg_seq=111701, nlmsg_pid=-473794963}, 0], iov_len=32768}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 20
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = 0 (Timeout)
+717   poll([{fd=3, events=POLLIN}, {fd=6, events=POLLIN}, {fd=7, events=POLLIN}, {fd=8, events=POLLIN}], 4, 3000) = ? ERESTART_RESTARTBLOCK (Interrupted by signal)
+717   --- SIGINT {si_signo=SIGINT, si_code=SI_KERNEL} ---
+717   +++ killed by SIGINT +++
