@@ -106,6 +106,7 @@ void handle_router_block_request(Event event);
 void handle_packet_send_event(Event event);
 void handle_packet_receive_event(Event event);
 void handle_timeout_event(Event event);
+void handle_get_virtual_time_event(Event event);
 
 // Helper functions for sending specific responses
 void send_success_response(int router_id, const char* request_id, const char* blocked_func, const char* message, const char* connection_id_str);
@@ -531,6 +532,7 @@ const char* event_type_to_string(EventType type) {
         case CONNECTION_ESTABLISHED_EVENT: return "CONNECTION_ESTABLISHED_EVENT";
         case LISTEN_EVENT: return "LISTEN_EVENT";
         case CONNECTION_INFO_EVENT: return "CONNECTION_INFO_EVENT";
+        case GET_VIRTUAL_TIME_EVENT: return "GET_VIRTUAL_TIME_EVENT";
         default: return "UNKNOWN_EVENT";
     }
 }
@@ -613,7 +615,7 @@ void desd_event_loop() {
                     break;
                 }
 
-                // 检查是否是需要立即处理的瞬时事件（如 LISTEN_EVENT, CONNECTION_INFO_EVENT）
+                // 检查是否是需要立即处理的瞬时事件（如 LISTEN_EVENT, CONNECTION_INFO_EVENT, GET_VIRTUAL_TIME_EVENT）
                 if (next_msg_from_router.event_type == LISTEN_EVENT) {
                     // 立即处理 LISTEN_EVENT，不放入事件队列
                     Event listen_event = {
@@ -642,6 +644,21 @@ void desd_event_loop() {
                     printf("[DESD] R%d sent CONNECTION_INFO_EVENT (ReqID: %s), processing immediately at VT %.3f.\n",
                            current_event.router_id, next_msg_from_router.request_id, current_virtual_time);
                     handle_connection_info_event(conn_info_event);
+                    // 继续循环，等待下一个事件
+                    continue;
+                } else if (next_msg_from_router.event_type == GET_VIRTUAL_TIME_EVENT) {
+                    // 立即处理 GET_VIRTUAL_TIME_EVENT，不放入事件队列
+                    Event get_time_event = {
+                        .timestamp = current_virtual_time,
+                        .router_id = next_msg_from_router.router_id,
+                        .event_type = GET_VIRTUAL_TIME_EVENT,
+                        .event_id = generate_event_id(),
+                        .payload = next_msg_from_router.payload
+                    };
+                    get_time_event.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+                    printf("[DESD] R%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), responding with VT %.6f.\n",
+                           current_event.router_id, next_msg_from_router.request_id, current_virtual_time);
+                    handle_get_virtual_time_event(get_time_event);
                     // 继续循环，等待下一个事件
                     continue;
                 }
@@ -1833,4 +1850,52 @@ void send_timeout_response(int router_id, const char* request_id, const char* ti
     response.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
     free(payload_str);
     send_message_to_router(router_id, &response);
+}
+
+// Handle GET_VIRTUAL_TIME_EVENT - 返回当前虚拟时间
+void handle_get_virtual_time_event(Event event) {
+    int router_id = event.router_id;
+    
+    // 从payload中提取request_id
+    json_error_t error;
+    json_t *payload_obj = json_loads(event.payload.json_str, 0, &error);
+    if (!payload_obj) {
+        fprintf(stderr, "[DESD ERROR] handle_get_virtual_time_event: Failed to parse payload JSON.\n");
+        return;
+    }
+    
+    const char* request_id = json_string_value(json_object_get(payload_obj, "request_id"));
+    if (!request_id) {
+        fprintf(stderr, "[DESD ERROR] handle_get_virtual_time_event: No request_id in payload.\n");
+        json_decref(payload_obj);
+        return;
+    }
+    
+    char request_id_local[64];
+    strncpy(request_id_local, request_id, 63);
+    request_id_local[63] = '\0';
+    json_decref(payload_obj);
+    
+    // 构建响应，返回当前虚拟时间
+    json_t *resp_payload_obj = json_object();
+    json_object_set_new(resp_payload_obj, "status", json_string("SUCCESS"));
+    json_object_set_new(resp_payload_obj, "current_virtual_time", json_real(current_virtual_time));
+    char *payload_str = json_dumps(resp_payload_obj, JSON_COMPACT);
+    json_decref(resp_payload_obj);
+    
+    Message response = {
+        .message_type = DESD_TO_HOOK,
+        .router_id = router_id,
+        .virtual_time = current_virtual_time  // 响应消息也携带虚拟时间
+    };
+    strncpy(response.request_id, request_id_local, 63);
+    response.request_id[63] = '\0';
+    strncpy(response.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+    response.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+    free(payload_str);
+    
+    send_message_to_router(router_id, &response);
+    
+    printf("[DESD] R%d GET_VIRTUAL_TIME_EVENT responded with VT=%.6f (ReqID: %s).\n", 
+           router_id, current_virtual_time, request_id_local);
 }

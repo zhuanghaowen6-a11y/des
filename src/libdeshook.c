@@ -17,6 +17,7 @@
 #include <sys/stat.h> // For fstat(), S_ISSOCK()
 #include <fcntl.h> // For fcntl constants
 #include <stdarg.h> // For va_list, va_start, va_end
+#include <time.h> // For clock_gettime
 
 // --- Global State ---
 #define MAX_TRACKED_FDS 1024
@@ -41,6 +42,7 @@ static unsigned int (*real_sleep)(unsigned int) = NULL;
 static ssize_t (*real_read)(int, void *, size_t) = NULL;
 static ssize_t (*real_write)(int, const void *, size_t) = NULL;
 static int (*real_fcntl)(int, int, ...) = NULL;
+static int (*real_clock_gettime)(clockid_t, struct timespec *) = NULL;
 
 void generate_request_id(char* id_buf); // Function prototype for generate_request_id
 
@@ -89,10 +91,12 @@ static void lib_init(void) {
     real_read = dlsym(RTLD_NEXT, "read");
     real_write = dlsym(RTLD_NEXT, "write");
     real_fcntl = dlsym(RTLD_NEXT, "fcntl");
+    real_clock_gettime = dlsym(RTLD_NEXT, "clock_gettime");
 
     if (!real_socket || !real_connect || !real_send || !real_recv || !real_close ||
         !real_bind || !real_listen || !real_accept || !real_unlink || !real_select || 
-        !real_poll || !real_sleep || !real_read || !real_write || !real_fcntl) {
+        !real_poll || !real_sleep || !real_read || !real_write || !real_fcntl ||
+        !real_clock_gettime) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Error in dlsym: %s\n", dlerror());
         _exit(1);
     }
@@ -1138,4 +1142,78 @@ ssize_t write(int fd, const void *buf, size_t count) {
     
     // 4. 普通文件或其他FD：不拦截
     return real_write(fd, buf, count);
+}
+
+// clock_gettime - 拦截并向desd查询虚拟时间
+int clock_gettime(clockid_t clk_id, struct timespec *tp) {
+    // 1. 未初始化DES：使用真实时间
+    if (desd_control_socket_fd == -1 || !real_clock_gettime) {
+        if (real_clock_gettime) {
+            return real_clock_gettime(clk_id, tp);
+        }
+        errno = ENOSYS;
+        return -1;
+    }
+    
+    // 2. 只拦截CLOCK_MONOTONIC（BIRD使用的时钟）
+    if (clk_id == CLOCK_MONOTONIC) {
+        // 向desd发送GET_VIRTUAL_TIME_EVENT请求
+        Message req = {
+            .message_type = HOOK_TO_DESD,
+            .router_id = my_router_id,
+            .event_type = GET_VIRTUAL_TIME_EVENT,
+            .virtual_time = 0.0
+        };
+        generate_request_id(req.request_id);
+        
+        // 构建payload
+        json_t *payload_obj = json_object();
+        json_object_set_new(payload_obj, "request_id", json_string(req.request_id));
+        char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
+        json_decref(payload_obj);
+        
+        strncpy(req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+        req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+        free(payload_str);
+        
+        // 发送请求并等待响应
+        Message resp;
+        if (!send_msg_to_desd_and_wait_for_response(&req, &resp)) {
+            fprintf(stderr, "[LIBDESHOOK ERROR] R%d clock_gettime() failed to get virtual time from desd.\n", 
+                    my_router_id);
+            // 降级到真实时间
+            return real_clock_gettime(clk_id, tp);
+        }
+        
+        // 解析响应中的虚拟时间
+        json_error_t error;
+        json_t *resp_payload_obj = json_loads(resp.payload.json_str, 0, &error);
+        if (!resp_payload_obj) {
+            fprintf(stderr, "[LIBDESHOOK ERROR] R%d clock_gettime() failed to parse response.\n", 
+                    my_router_id);
+            return real_clock_gettime(clk_id, tp);
+        }
+        
+        json_t *vtime_json = json_object_get(resp_payload_obj, "current_virtual_time");
+        if (!vtime_json || !json_is_number(vtime_json)) {
+            fprintf(stderr, "[LIBDESHOOK ERROR] R%d clock_gettime() no virtual time in response.\n", 
+                    my_router_id);
+            json_decref(resp_payload_obj);
+            return real_clock_gettime(clk_id, tp);
+        }
+        
+        double vtime_sec = json_number_value(vtime_json);
+        json_decref(resp_payload_obj);
+        
+        // 转换为timespec
+        if (tp) {
+            tp->tv_sec = (time_t)vtime_sec;
+            tp->tv_nsec = (long)((vtime_sec - tp->tv_sec) * 1000000000);
+        }
+        
+        return 0;
+    }
+    
+    // 3. 其他时钟类型使用真实时间
+    return real_clock_gettime(clk_id, tp);
 }

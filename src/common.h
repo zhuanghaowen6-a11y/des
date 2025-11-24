@@ -26,7 +26,8 @@ typedef enum {
     CONNECT_REQUEST_EVENT,    // libdeshook.so -> desd：路由器请求建立连接（connect）
     CONNECTION_ESTABLISHED_EVENT, // desd内部事件：连接在虚拟时间上建立
     LISTEN_EVENT,             // libdeshook.so -> desd：路由器开始监听（listen）
-    CONNECTION_INFO_EVENT     // libdeshook.so -> desd：通知desd新建立的连接信息（accept返回后）
+    CONNECTION_INFO_EVENT,    // libdeshook.so -> desd：通知desd新建立的连接信息（accept返回后）
+    GET_VIRTUAL_TIME_EVENT    // libdeshook.so -> desd：请求当前虚拟时间
 
 } EventType;
 
