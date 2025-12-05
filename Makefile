@@ -26,6 +26,8 @@ LIBDESHOOK = $(BUILD_DIR)/libdeshook.so
 # 基础测试程序
 BASIC_R1 = $(BUILD_DIR)/r1
 BASIC_R2 = $(BUILD_DIR)/r2
+BASIC_R1_TCP = $(BUILD_DIR)/r1_tcp
+BASIC_R2_TCP = $(BUILD_DIR)/r2_tcp
 
 # BIRD测试程序
 BIRD_TEST_R1 = $(BUILD_DIR)/test_rw_basic_r1
@@ -36,7 +38,7 @@ BIRD_TEST_R2 = $(BUILD_DIR)/test_rw_basic_r2
 # ==========================
 
 # 默认：编译核心程序
-all: $(DESD) $(LIBDESHOOK) $(BASIC_R1) $(BASIC_R2)
+all: $(DESD) $(LIBDESHOOK) $(BASIC_R1) $(BASIC_R2) $(BASIC_R1_TCP) $(BASIC_R2_TCP)
 
 # 完整编译：包括所有测试程序
 full: all bird-tests poll-tests tcp-tests timeout-tests multi-tests
@@ -52,7 +54,7 @@ $(DESD): $(DESD_SRC) $(COMMON_SRC) $(COMMON_H)
 
 $(LIBDESHOOK): $(LIBDESHOOK_SRC) $(COMMON_SRC) $(COMMON_H)
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -shared -fPIC $(LIBDESHOOK_SRC) $(COMMON_SRC) -o $(LIBDESHOOK) $(LDFLAGS) -ldl
+	$(CC) $(CFLAGS) -shared -fPIC $(LIBDESHOOK_SRC) $(COMMON_SRC) -o $(LIBDESHOOK) $(LDFLAGS) -ldl -lpthread
 	@echo "✓ Built libdeshook.so"
 
 # ==========================
@@ -68,6 +70,16 @@ $(BASIC_R2): $(TEST_DIR)/basic/r2.c $(COMMON_H)
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(TEST_DIR)/basic/r2.c -o $(BASIC_R2)
 	@echo "✓ Built r2"
+
+$(BASIC_R1_TCP): $(TEST_DIR)/basic/r1_tcp.c $(COMMON_H)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/basic/r1_tcp.c -o $(BASIC_R1_TCP)
+	@echo "✓ Built r1_tcp"
+
+$(BASIC_R2_TCP): $(TEST_DIR)/basic/r2_tcp.c $(COMMON_H)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/basic/r2_tcp.c -o $(BASIC_R2_TCP)
+	@echo "✓ Built r2_tcp"
 
 # ==========================
 # BIRD测试程序
@@ -90,7 +102,9 @@ $(BIRD_TEST_R2): $(TEST_DIR)/bird/test_rw_basic_r2.c
 # ==========================
 
 poll-tests: $(BUILD_DIR)/r_poll_server_enhanced $(BUILD_DIR)/r_poll_client_enhanced \
-            $(BUILD_DIR)/r_poll_server_test_v2 $(BUILD_DIR)/r_poll_client_test_v2
+            $(BUILD_DIR)/r_poll_server_test_v2 $(BUILD_DIR)/r_poll_client_test_v2 \
+            $(BUILD_DIR)/r_poll_mixed_server $(BUILD_DIR)/r_poll_mixed_client \
+            $(BUILD_DIR)/r_poll_timing_server $(BUILD_DIR)/r_poll_timing_client
 
 $(BUILD_DIR)/r_poll_server_enhanced: $(TEST_DIR)/poll/r_poll_server_enhanced.c
 	@mkdir -p $(BUILD_DIR)
@@ -111,6 +125,26 @@ $(BUILD_DIR)/r_poll_client_test_v2: $(TEST_DIR)/poll/r_poll_client_test_v2.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(TEST_DIR)/poll/r_poll_client_test_v2.c -o $@
 	@echo "✓ Built r_poll_client_test_v2"
+
+$(BUILD_DIR)/r_poll_mixed_server: $(TEST_DIR)/poll/r_poll_mixed_server.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/poll/r_poll_mixed_server.c -o $@
+	@echo "✓ Built r_poll_mixed_server"
+
+$(BUILD_DIR)/r_poll_mixed_client: $(TEST_DIR)/poll/r_poll_mixed_client.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/poll/r_poll_mixed_client.c -o $@
+	@echo "✓ Built r_poll_mixed_client"
+
+$(BUILD_DIR)/r_poll_timing_server: $(TEST_DIR)/poll/r_poll_timing_server.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/poll/r_poll_timing_server.c -o $@
+	@echo "✓ Built r_poll_timing_server"
+
+$(BUILD_DIR)/r_poll_timing_client: $(TEST_DIR)/poll/r_poll_timing_client.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/poll/r_poll_timing_client.c -o $@
+	@echo "✓ Built r_poll_timing_client"
 
 # ==========================
 # TCP测试程序

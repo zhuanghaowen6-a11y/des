@@ -18,6 +18,7 @@
 #include <fcntl.h> // For fcntl constants
 #include <stdarg.h> // For va_list, va_start, va_end
 #include <time.h> // For clock_gettime
+#include <pthread.h> // For thread safety
 
 // --- Global State ---
 #define MAX_TRACKED_FDS 1024
@@ -25,6 +26,17 @@ static int socket_fds[MAX_TRACKED_FDS] = {0}; // 1表示是socket (仅AF_INET/AF
 static int nonblocking_fds[MAX_TRACKED_FDS] = {0}; // 1表示设置了O_NONBLOCK
 int my_router_id = -1;
 int desd_control_socket_fd = -1;
+static unsigned long long total_clock_calls = 0;
+static double last_reported_vtime = -1.0;
+
+// --- Thread Safety ---
+// 全局互斥锁：确保同一时刻只有一个线程与desd通信
+// 这是关键：BIRD 3使用多线程，但DES假设每个路由器是单线程的
+static pthread_mutex_t desd_comm_mutex = PTHREAD_MUTEX_INITIALIZER;
+// 保护request_counter的原子性
+static pthread_mutex_t request_counter_mutex = PTHREAD_MUTEX_INITIALIZER;
+// 保护socket_fds数组的并发访问
+static pthread_mutex_t socket_fds_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Real function pointers
 static int (*real_socket)(int, int, int) = NULL;
@@ -152,16 +164,27 @@ static void lib_init(void) {
 static unsigned long next_request_id_val = 1;
 
 void generate_request_id(char* id_buf) {
-    snprintf(id_buf, 64, "req_%lu_%d", next_request_id_val++, my_router_id);
+    // 🔒 线程安全：保护request_counter的原子递增
+    pthread_mutex_lock(&request_counter_mutex);
+    unsigned long current_id = next_request_id_val++;
+    pthread_mutex_unlock(&request_counter_mutex);
+    
+    snprintf(id_buf, 64, "req_%lu_%d", current_id, my_router_id);
 }
 
 // Helper function to send message to desd and wait for response
 // 这个函数是libdeshook与desd之间同步通信的核心，路由器在此处阻塞
 int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp_msg_out) {
+    // 🔒 关键线程安全机制：确保同一时刻只有一个线程与desd通信
+    // 这实现了DES的单线程假设：每个路由器在同一时刻只有一个活跃的执行流
+    pthread_mutex_lock(&desd_comm_mutex);
+    
     // Send the request message
     char *json_str = message_to_json(req_msg);
     if (!json_str) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Failed to serialize request message.\n");
+        fflush(stderr);
+        pthread_mutex_unlock(&desd_comm_mutex); // 🔓 错误时也要解锁
         return 0;
     }
     
@@ -170,7 +193,9 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
     char *json_with_newline = (char*)malloc(json_len + 2); // +1 for '\n', +1 for '\0'
     if (!json_with_newline) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Failed to allocate memory for message.\n");
+        fflush(stderr);
         free(json_str);
+        pthread_mutex_unlock(&desd_comm_mutex); // 🔓 错误时也要解锁
         return 0;
     }
     strcpy(json_with_newline, json_str);
@@ -178,11 +203,18 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
     json_with_newline[json_len + 1] = '\0';
     free(json_str);
     
-    if (real_send(desd_control_socket_fd, json_with_newline, strlen(json_with_newline), 0) < 0) {
-        perror("[LIBDESHOOK ERROR] send_msg_to_desd_and_wait_for_response - send");
+    // 移除频繁的消息发送日志
+    
+    ssize_t sent = real_send(desd_control_socket_fd, json_with_newline, strlen(json_with_newline), 0);
+    if (sent < 0) {
+        fprintf(stderr, "[LIBDESHOOK ERROR] send_msg_to_desd_and_wait_for_response - send failed (errno=%d): ", errno);
+        perror("");
+        fflush(stderr);
         free(json_with_newline);
+        pthread_mutex_unlock(&desd_comm_mutex); // 🔓 错误时也要解锁
         return 0;
     }
+    // 移除字节数日志
     free(json_with_newline);
 
     // Now, synchronously wait for the response from desd
@@ -191,23 +223,30 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
     
     if (bytes_received <= 0) {
         if (bytes_received == 0) {
-            fprintf(stderr, "[LIBDESHOOK ERROR] DESD disconnected during response wait.\n");
+            fprintf(stderr, "[LIBDESHOOK ERROR] DESD disconnected during response wait (recv returned 0).\n");
         } else {
-            perror("[LIBDESHOOK ERROR] send_msg_to_desd_and_wait_for_response - recv");
+            fprintf(stderr, "[LIBDESHOOK ERROR] send_msg_to_desd_and_wait_for_response - recv failed (errno=%d): ", errno);
+            perror("");
         }
+        fflush(stderr);
+        pthread_mutex_unlock(&desd_comm_mutex); // 🔓 错误时也要解锁
         return 0;
     }
+    // 移除接收字节数日志
     buffer[bytes_received] = '\0';
 
     json_to_message(buffer, resp_msg_out);
 
     // For safety, ensure the response matches the request_id. 
-    // In a strict single-threaded DES, this should always be the case if no other messages intervene.
+    // With the mutex, this should always match now
     if (strcmp(req_msg->request_id, resp_msg_out->request_id) != 0) {
         fprintf(stderr, "[LIBDESHOOK WARNING] Response request_id mismatch! Expected %s, Got %s.\n",
                 req_msg->request_id, resp_msg_out->request_id);
         // We might still process it if it's the only message.
     }
+    
+    // 🔓 成功完成通信，释放互斥锁
+    pthread_mutex_unlock(&desd_comm_mutex);
     return 1; // Success
 }
 
@@ -215,6 +254,10 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
 
 // connect
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+    printf("[LIBDESHOOK] R%d connect() called: sockfd=%d family=%d\n", 
+           my_router_id, sockfd, addr->sa_family);
+    fflush(stdout);
+    
     // 如果desd未连接，则直接调用真实connect
     if (desd_control_socket_fd == -1) {
         return real_connect(sockfd, addr, addrlen);
@@ -237,6 +280,11 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
             return real_connect(sockfd, addr, addrlen);
         }
         
+        // 不拦截BIRD内部控制socket（/run/bird/bird.ctl）
+        if (strstr(target_path, "/run/bird") != NULL || strstr(target_path, "bird.ctl") != NULL) {
+            return real_connect(sockfd, addr, addrlen);
+        }
+        
         strncpy(abstract_address, target_path, sizeof(abstract_address) - 1);
         abstract_address[sizeof(abstract_address) - 1] = '\0';
     } else if (addr->sa_family == AF_INET) {
@@ -250,6 +298,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
 
     printf("[LIBDESHOOK] R%d intercepted connect() to %s (family: %s).\n", 
            my_router_id, abstract_address, addr->sa_family == AF_UNIX ? "AF_UNIX" : "AF_INET");
+    fflush(stdout);
 
     // 1. 告知desd：发送CONNECT_REQUEST_EVENT事件
     Message connect_req;
@@ -269,6 +318,9 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     free(payload_str);
     json_decref(payload_obj);
 
+    printf("[LIBDESHOOK] R%d connect() sending CONNECT_REQUEST to desd...\n", my_router_id);
+    fflush(stdout);
+    
     Message connect_resp;
     if (send_msg_to_desd_and_wait_for_response(&connect_req, &connect_resp)) {
         json_error_t error;
@@ -297,7 +349,19 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
             // 1. 客户端的 socket_fd 在 CONNECT_REQUEST_EVENT 中已知
             // 2. CONNECTION_ESTABLISHED_EVENT 已经注册了客户端连接
             // 3. 只有服务端需要发送 CONNECTION_INFO_EVENT（通知 accept() 返回的 fd）
-            return real_connect(sockfd, addr, addrlen);
+            int result = real_connect(sockfd, addr, addrlen);
+            int saved_errno = errno;
+            printf("[LIBDESHOOK] R%d connect() real_connect returned: %d (errno=%d %s)\n",
+                   my_router_id, result, saved_errno, 
+                   saved_errno == EINPROGRESS ? "EINPROGRESS" :
+                   saved_errno == EISCONN ? "EISCONN" : 
+                   saved_errno == 0 ? "SUCCESS" : strerror(saved_errno));
+            fflush(stdout);
+            
+            printf("[LIBDESHOOK] R%d connect() returning result %d to BIRD\n", my_router_id, result);
+            fflush(stdout);
+            errno = saved_errno;
+            return result;
 
         } else {
             const char* error_message = "Unknown error";
@@ -329,6 +393,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
 
     // 假设是针对ROUTER_SOCKET_PATH的监听socket
     printf("[LIBDESHOOK] R%d intercepted accept() on sockfd %d.\n", my_router_id, sockfd);
+    fflush(stdout);
 
     // 1. 告知desd：发送ROUTER_BLOCK_REQUEST事件（blocked_function=ACCEPT）
     Message block_req;
@@ -432,7 +497,21 @@ ssize_t send(int sockfd, const void *buf, size_t len, int flags) {
         return real_send(sockfd, buf, len, flags);
     }
 
+    // 不拦截netlink socket（与内核通信）和其他非网络socket
+    struct sockaddr_storage addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(sockfd, (struct sockaddr*)&addr, &addr_len) == 0) {
+        if (addr.ss_family == AF_NETLINK || addr.ss_family == AF_UNIX) {
+            return real_send(sockfd, buf, len, flags);
+        }
+        // 只拦截AF_INET (IPv4 TCP/UDP)
+        if (addr.ss_family != AF_INET) {
+            return real_send(sockfd, buf, len, flags);
+        }
+    }
+
     printf("[LIBDESHOOK] R%d intercepted send() on sockfd %d, len %zu.\n", my_router_id, sockfd, len);
+    fflush(stdout);
 
     // 1. 构建 PACKET_SEND_EVENT 消息
     Message send_req;
@@ -547,6 +626,19 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
         return real_recv(sockfd, buf, len, flags);
     }
 
+    // 不拦截netlink socket（与内核通信）和其他非网络socket
+    struct sockaddr_storage addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(sockfd, (struct sockaddr*)&addr, &addr_len) == 0) {
+        if (addr.ss_family == AF_NETLINK || addr.ss_family == AF_UNIX) {
+            return real_recv(sockfd, buf, len, flags);
+        }
+        // 只拦截AF_INET (IPv4 TCP/UDP)
+        if (addr.ss_family != AF_INET) {
+            return real_recv(sockfd, buf, len, flags);
+        }
+    }
+
     printf("[LIBDESHOOK] R%d intercepted recv() on sockfd %d, max len %zu.\n", my_router_id, sockfd, len);
 
     // 检查是否为非阻塞socket
@@ -641,26 +733,107 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
     }
 }
 
-// poll (取代select)
-int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+// poll的内部实现 - 真正的hook逻辑
+static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
+    //printf("hook poll!!!\n");
     if (desd_control_socket_fd == -1) {
         return real_poll(fds, nfds, timeout);
     }
 
-    printf("[LIBDESHOOK] R%d intercepted poll() with timeout %d ms.\n", my_router_id, timeout);
+    printf("[LIBDESHOOK] R%d intercepted poll() with %lu fds, timeout %d ms.\n", my_router_id, (unsigned long)nfds, timeout);
 
-    // 1. 尝试非阻塞地调用真实的poll，看是否有FD立即可用
-    int real_poll_result = real_poll(fds, nfds, 0); // 非阻塞调用
-    if (real_poll_result != 0) {
-        printf("[LIBDESHOOK] R%d poll() immediately returned %d ready FDs from real poll.\n", my_router_id, real_poll_result);
-        return real_poll_result;
+    // 🔒 线程安全：保护socket_fds数组的读取，创建一个本地副本
+    // 避免在整个poll过程中持有锁，因为poll可能会阻塞很长时间
+    int local_socket_fds[MAX_TRACKED_FDS];
+    pthread_mutex_lock(&socket_fds_mutex);
+    memcpy(local_socket_fds, socket_fds, sizeof(socket_fds));
+    pthread_mutex_unlock(&socket_fds_mutex);
+
+    // 分离DES管理的socket和非DES管理的fd
+    nfds_t des_count = 0;
+    nfds_t non_des_count = 0;
+    
+    for (nfds_t i = 0; i < nfds; i++) {
+        int fd = fds[i].fd;
+        if (fd >= 0 && fd < MAX_TRACKED_FDS && local_socket_fds[fd]) {
+            des_count++;
+            printf("[LIBDESHOOK] R%d poll(): fd %d is DES-managed socket\n", my_router_id, fd);
+        } else {
+            non_des_count++;
+            printf("[LIBDESHOOK] R%d poll(): fd %d is non-DES fd\n", my_router_id, fd);
+        }
+    }
+    
+    printf("[LIBDESHOOK] R%d poll() split: %lu DES-managed, %lu non-DES\n", 
+           my_router_id, (unsigned long)des_count, (unsigned long)non_des_count);
+
+    // 如果没有DES管理的socket，直接使用real_poll
+    if (des_count == 0) {
+        printf("[LIBDESHOOK] R%d poll() has no DES-managed sockets, using real_poll\n", my_router_id);
+        return real_poll(fds, nfds, timeout);
     }
 
-    // 如果没有FD立即可用，且有超时或需要阻塞，则向desd注册阻塞请求
-    if (timeout == 0) { // 非阻塞poll且没有立即就绪的FD
-        return 0;
+    // 1. 对于非DES管理的fd，先用real_poll非阻塞检查
+    int non_des_ready = 0;
+    if (non_des_count > 0) {
+        struct pollfd *non_des_fds = (struct pollfd*)malloc(sizeof(struct pollfd) * non_des_count);
+        nfds_t non_des_idx = 0;
+        
+        for (nfds_t i = 0; i < nfds; i++) {
+            int fd = fds[i].fd;
+            if (fd < 0 || fd >= MAX_TRACKED_FDS || !local_socket_fds[fd]) {
+                non_des_fds[non_des_idx] = fds[i];
+                non_des_idx++;
+            }
+        }
+        
+        // 非阻塞检查非DES fd
+        non_des_ready = real_poll(non_des_fds, non_des_count, 0);
+        
+        if (non_des_ready > 0) {
+            printf("[LIBDESHOOK] R%d poll() real_poll returned %d ready non-DES fds\n", 
+                   my_router_id, non_des_ready);
+            // 将结果复制回原数组
+            non_des_idx = 0;
+            for (nfds_t i = 0; i < nfds; i++) {
+                int fd = fds[i].fd;
+                if (fd < 0 || fd >= MAX_TRACKED_FDS || !local_socket_fds[fd]) {
+                    fds[i].revents = non_des_fds[non_des_idx].revents;
+                    non_des_idx++;
+                }
+            }
+        }
+        
+        free(non_des_fds);
+        
+        // 如果非DES fd已就绪，立即返回（无论timeout是多少）
+        if (non_des_ready > 0) {
+            printf("[LIBDESHOOK] R%d poll() non-DES fds ready, returning immediately without waiting for DES\n", 
+                   my_router_id);
+            // 清除DES fd的revents（它们未被检查）
+            for (nfds_t i = 0; i < nfds; i++) {
+                int fd = fds[i].fd;
+                if (fd >= 0 && fd < MAX_TRACKED_FDS && local_socket_fds[fd]) {
+                    fds[i].revents = 0;
+                }
+            }
+            return non_des_ready;
+        }
     }
 
+    // 如果没有DES fd需要检查，直接返回
+    if (des_count == 0) {
+        return non_des_ready;  // 通常为0
+    }
+    
+    // 如果是非阻塞poll且非DES fd都没就绪，对DES fd也进行非阻塞检查
+    if (timeout == 0) {
+        printf("[LIBDESHOOK] R%d poll() non-blocking, non-DES not ready, checking DES fds\n", 
+               my_router_id);
+        // 继续向desd发送请求（timeout=0）
+    }
+
+    // 2. 向desd发送DES管理的socket请求
     Message poll_block_req;
     memset(&poll_block_req, 0, sizeof(Message));
     poll_block_req.message_type = HOOK_TO_DESD;
@@ -670,19 +843,22 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     generate_request_id(poll_block_req.request_id);
 
     json_t *payload_obj = json_object();
-    json_object_set_new(payload_obj, "blocked_function", json_string("SELECT_CALL")); // 命名为SELECT_CALL以兼容EventType
+    json_object_set_new(payload_obj, "blocked_function", json_string("SELECT_CALL"));
     json_object_set_new(payload_obj, "request_id", json_string(poll_block_req.request_id));
     if (timeout > 0) {
         json_object_set_new(payload_obj, "timeout_ms", json_integer(timeout));
     }
     
-    // 传递监听的 FD 列表及其监听的事件类型（扩展支持POLLOUT/POLLERR等）
+    // 只传递DES管理的socket fd
     json_t *monitored_fds_array = json_array();
     for (nfds_t i = 0; i < nfds; i++) {
-        json_t *fd_info = json_object();
-        json_object_set_new(fd_info, "fd", json_integer(fds[i].fd));
-        json_object_set_new(fd_info, "events", json_integer(fds[i].events));
-        json_array_append_new(monitored_fds_array, fd_info);
+        int fd = fds[i].fd;
+        if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
+            json_t *fd_info = json_object();
+            json_object_set_new(fd_info, "fd", json_integer(fds[i].fd));
+            json_object_set_new(fd_info, "events", json_integer(fds[i].events));
+            json_array_append_new(monitored_fds_array, fd_info);
+        }
     }
     json_object_set_new(payload_obj, "monitored_fds", monitored_fds_array);
     
@@ -699,15 +875,18 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
         if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
             strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "SUCCESS") == 0) {
             
-            // 方案B：从响应中提取就绪的 FD 列表
+            // 从响应中提取就绪的 DES socket FD 列表
             json_t *ready_fds_array = json_object_get(resp_payload_obj, "ready_fds");
             
-            // 清除所有 revents
+            // 只清除DES管理的socket的revents（保留非DES fd的revents）
             for (nfds_t i = 0; i < nfds; i++) {
-                fds[i].revents = 0;
+                int fd = fds[i].fd;
+                if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
+                    fds[i].revents = 0;
+                }
             }
             
-            int ready_count = 0;
+            int des_ready_count = 0;
             
             if (ready_fds_array && json_is_array(ready_fds_array)) {
                 // 根据 ready_fds 精确设置 revents（支持多种事件类型）
@@ -730,7 +909,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
                                 if (fds[i].fd == ready_fd) {
                                     // 只设置客户端请求的事件类型
                                     fds[i].revents = ready_revents & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
-                                    ready_count++;
+                                    des_ready_count++;
                                     break;
                                 }
                             }
@@ -738,25 +917,34 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
                     }
                 }
                 
-                printf("[LIBDESHOOK] R%d poll() unblocked by DESD (%d ready FD(s) out of %zu reported).\n", 
-                       my_router_id, ready_count, array_size);
+                printf("[LIBDESHOOK] R%d poll() DESD reported %d ready DES socket(s)\n", 
+                       my_router_id, des_ready_count);
             }
             
+            // 计算总的就绪fd数量（DES + 非DES）
+            int total_ready = des_ready_count + non_des_ready;
+            printf("[LIBDESHOOK] R%d poll() returning total %d ready FDs (%d DES + %d non-DES)\n", 
+                   my_router_id, total_ready, des_ready_count, non_des_ready);
+            
             if (resp_payload_obj) json_decref(resp_payload_obj);
-            return ready_count;  // 返回就绪 FD 数量
+            return total_ready;
 
         } else if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
                    strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "TIMEOUT") == 0) {
             printf("[LIBDESHOOK] R%d poll() timed out (DESD confirmed).\n", my_router_id);
             
-            // 清除所有 revents
+            // 超时：只清除DES socket的revents（保留非DES fd的revents）
             for (nfds_t i = 0; i < nfds; i++) {
-                fds[i].revents = 0;
+                int fd = fds[i].fd;
+                if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
+                    fds[i].revents = 0;
+                }
             }
             
             if (resp_payload_obj) json_decref(resp_payload_obj);
-            return 0; // poll timeout returns 0
-        }else {
+            // 如果有非DES fd就绪，返回它们的数量；否则返回0表示超时
+            return non_des_ready;
+        } else {
             fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() failed (DESD rejected or error): %s.\n", my_router_id,
                     resp_payload_obj ? json_string_value(json_object_get(resp_payload_obj, "error_message")) : "Unknown error");
             if (resp_payload_obj) json_decref(resp_payload_obj);
@@ -768,6 +956,32 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
         errno = EIO;
         return -1;
     }
+}
+
+// Hook所有poll变体 - BIRD可能调用glibc的内部版本
+int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+    return poll_internal(fds, nfds, timeout);
+}
+
+// Hook __poll (弱符号版本)
+int __poll(struct pollfd *fds, nfds_t nfds, int timeout) __attribute__((weak, alias("poll")));
+
+// Hook __libc_poll (libc内部版本)
+int __libc_poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+    fprintf(stderr, "[LIBDESHOOK] R%d __libc_poll() called -> redirecting to poll_internal\n", my_router_id);
+    fflush(stderr);
+    return poll_internal(fds, nfds, timeout);
+}
+
+// Hook __GI___poll (glibc内部版本) - 这是BIRD实际调用的！
+int __GI___poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+    fprintf(stderr, "[LIBDESHOOK] R%d __GI___poll() called -> redirecting to poll_internal\n", my_router_id);
+    fflush(stderr);
+    return poll_internal(fds, nfds, timeout);
+}
+
+int __poll_chk(struct pollfd *fds, nfds_t nfds, int timeout, size_t fds_size) {
+    return poll_internal(fds, nfds, timeout);
 }
 
 // select - 用于支持带超时的I/O操作
@@ -805,6 +1019,79 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
     if (timeout_ms >= 0) {
         json_object_set_new(payload_obj, "timeout_ms", json_integer(timeout_ms));
     }
+    
+    // 构建monitored_fds数组，传递要监控的文件描述符信息
+    json_t *monitored_fds_array = json_array();
+    
+    // 添加readfds中的文件描述符
+    if (readfds != NULL) {
+        for (int fd = 0; fd < nfds; fd++) {
+            if (FD_ISSET(fd, readfds)) {
+                json_t *fd_info = json_object();
+                json_object_set_new(fd_info, "fd", json_integer(fd));
+                json_object_set_new(fd_info, "events", json_integer(0x001)); // POLLIN
+                json_array_append_new(monitored_fds_array, fd_info);
+            }
+        }
+    }
+    
+    // 添加writefds中的文件描述符
+    if (writefds != NULL) {
+        for (int fd = 0; fd < nfds; fd++) {
+            if (FD_ISSET(fd, writefds)) {
+                // 检查是否已经在数组中
+                int found = 0;
+                size_t array_size = json_array_size(monitored_fds_array);
+                for (size_t i = 0; i < array_size; i++) {
+                    json_t *existing = json_array_get(monitored_fds_array, i);
+                    int existing_fd = json_integer_value(json_object_get(existing, "fd"));
+                    if (existing_fd == fd) {
+                        // 已存在，添加POLLOUT标志
+                        int events = json_integer_value(json_object_get(existing, "events"));
+                        json_object_set_new(existing, "events", json_integer(events | 0x004)); // POLLOUT
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    json_t *fd_info = json_object();
+                    json_object_set_new(fd_info, "fd", json_integer(fd));
+                    json_object_set_new(fd_info, "events", json_integer(0x004)); // POLLOUT
+                    json_array_append_new(monitored_fds_array, fd_info);
+                }
+            }
+        }
+    }
+    
+    // 添加exceptfds中的文件描述符
+    if (exceptfds != NULL) {
+        for (int fd = 0; fd < nfds; fd++) {
+            if (FD_ISSET(fd, exceptfds)) {
+                int found = 0;
+                size_t array_size = json_array_size(monitored_fds_array);
+                for (size_t i = 0; i < array_size; i++) {
+                    json_t *existing = json_array_get(monitored_fds_array, i);
+                    int existing_fd = json_integer_value(json_object_get(existing, "fd"));
+                    if (existing_fd == fd) {
+                        int events = json_integer_value(json_object_get(existing, "events"));
+                        json_object_set_new(existing, "events", json_integer(events | 0x008)); // POLLERR
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    json_t *fd_info = json_object();
+                    json_object_set_new(fd_info, "fd", json_integer(fd));
+                    json_object_set_new(fd_info, "events", json_integer(0x008)); // POLLERR
+                    json_array_append_new(monitored_fds_array, fd_info);
+                }
+            }
+        }
+    }
+    
+    json_object_set_new(payload_obj, "monitored_fds", monitored_fds_array);
+    
+    printf("[LIBDESHOOK] R%d select() monitoring %zu fd(s).\n", my_router_id, json_array_size(monitored_fds_array));
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     strncpy(select_block_req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
     select_block_req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
@@ -824,13 +1111,41 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
             
-            printf("[LIBDESHOOK] R%d select() unblocked by DESD (data available in desd buffer).\n", my_router_id);
+            // 获取desd返回的ready_fds
+            json_t *ready_fds_array = json_object_get(resp_payload_obj, "ready_fds");
+            int ready_count = 0;
+            
+            if (ready_fds_array && json_is_array(ready_fds_array)) {
+                // 清空原始的fd_set
+                if (readfds) FD_ZERO(readfds);
+                if (writefds) FD_ZERO(writefds);
+                if (exceptfds) FD_ZERO(exceptfds);
+                
+                // 设置desd返回的就绪fd
+                size_t array_size = json_array_size(ready_fds_array);
+                for (size_t i = 0; i < array_size; i++) {
+                    json_t *fd_info = json_array_get(ready_fds_array, i);
+                    int fd = json_integer_value(json_object_get(fd_info, "fd"));
+                    int revents = json_integer_value(json_object_get(fd_info, "revents"));
+                    
+                    if (revents & 0x001) { // POLLIN
+                        if (readfds) FD_SET(fd, readfds);
+                        ready_count++;
+                    }
+                    if (revents & 0x004) { // POLLOUT
+                        if (writefds) FD_SET(fd, writefds);
+                        ready_count++;
+                    }
+                    if (revents & 0x008) { // POLLERR
+                        if (exceptfds) FD_SET(fd, exceptfds);
+                        ready_count++;
+                    }
+                }
+            }
+            
+            printf("[LIBDESHOOK] R%d select() unblocked by DESD (%d ready fd(s)).\n", my_router_id, ready_count);
             if (resp_payload_obj) json_decref(resp_payload_obj);
-
-            // 数据在 desd 的缓冲区中，不在真实 socket 中
-            // 直接返回 1 表示有 fd 就绪（readfds 中的 socket）
-            // readfds 保持不变，用户会认为该 socket 有数据可读
-            return 1;
+            return ready_count;
 
         } else if (status_json && json_is_string(status_json) &&
                    strcmp(json_string_value(status_json), "TIMEOUT") == 0) {
@@ -895,8 +1210,27 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
 
 // listen - 向 desd 通知开始监听
 int listen(int sockfd, int backlog) {
+    printf("[LIBDESHOOK] R%d listen() called: sockfd=%d\n", my_router_id, sockfd);
+    fflush(stdout);
+    
     if (desd_control_socket_fd == -1) {
         return real_listen(sockfd, backlog);
+    }
+
+    // 首先获取socket地址，判断是否需要过滤
+    struct sockaddr_storage addr_storage;
+    socklen_t addr_len = sizeof(addr_storage);
+    if (getsockname(sockfd, (struct sockaddr *)&addr_storage, &addr_len) == 0) {
+        if (addr_storage.ss_family == AF_UNIX) {
+            struct sockaddr_un *un_addr = (struct sockaddr_un *)&addr_storage;
+            // 过滤BIRD内部控制socket和其他内部通信
+            if (strstr(un_addr->sun_path, "/run/bird") != NULL || 
+                strstr(un_addr->sun_path, "bird.ctl") != NULL) {
+                printf("[LIBDESHOOK] R%d skipping listen() on internal socket: %s\n", 
+                       my_router_id, un_addr->sun_path);
+                return real_listen(sockfd, backlog);
+            }
+        }
     }
 
     printf("[LIBDESHOOK] R%d intercepted listen() on sockfd %d.\n", my_router_id, sockfd);
@@ -909,8 +1243,6 @@ int listen(int sockfd, int backlog) {
     }
 
     // listen 成功后，获取 socket 绑定的地址（支持 UDS 和 TCP）
-    struct sockaddr_storage addr_storage;
-    socklen_t addr_len = sizeof(addr_storage);
     if (getsockname(sockfd, (struct sockaddr *)&addr_storage, &addr_len) != 0) {
         fprintf(stderr, "[LIBDESHOOK ERROR] R%d failed to get socket name for fd %d.\n", my_router_id, sockfd);
         return result; // listen 已经成功，所以返回成功
@@ -986,11 +1318,19 @@ int unlink(const char *pathname) {
 // socket - 简单拦截，不与DESD交互，但需要标记socket FD
 int socket(int domain, int type, int protocol) {
     int fd = real_socket(domain, type, protocol);
-    printf("[LIBDESHOOK] R%d intercepted socket() call. Created fd: %d, domain: %d.\n", my_router_id, fd, domain);
+    const char* domain_str = (domain == AF_INET) ? "AF_INET" : 
+                             (domain == AF_INET6) ? "AF_INET6" :
+                             (domain == AF_UNIX) ? "AF_UNIX" :
+                             (domain == 16) ? "AF_NETLINK" : "OTHER";
+    printf("[LIBDESHOOK] R%d intercepted socket() call. Created fd: %d, domain: %d (%s), type: %d.\n", 
+           my_router_id, fd, domain, domain_str, type);
+    fflush(stdout);
     
-    // 标记AF_INET/AF_INET6的socket（需要DES管理）
+    // 🔒 线程安全：标记AF_INET/AF_INET6的socket（需要DES管理）
     if (fd >= 0 && fd < MAX_TRACKED_FDS && (domain == AF_INET || domain == AF_INET6)) {
+        pthread_mutex_lock(&socket_fds_mutex);
         socket_fds[fd] = 1;
+        pthread_mutex_unlock(&socket_fds_mutex);
         printf("[LIBDESHOOK] R%d marked fd %d as DES-managed socket.\n", my_router_id, fd);
     }
     
@@ -1176,14 +1516,25 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
         req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
         free(payload_str);
         
+        // 临时开启clock_gettime日志用于调试
+        static int clock_call_count = 0;
+        if ((++clock_call_count % 10) == 0) {  // 每10次打印一次
+            printf("[LIBDESHOOK] R%d clock_gettime(CLOCK_MONOTONIC) called (count: %d)\n",
+                   my_router_id, clock_call_count);
+            fflush(stdout);
+        }
+        
         // 发送请求并等待响应
         Message resp;
         if (!send_msg_to_desd_and_wait_for_response(&req, &resp)) {
             fprintf(stderr, "[LIBDESHOOK ERROR] R%d clock_gettime() failed to get virtual time from desd.\n", 
                     my_router_id);
+            fflush(stderr);
             // 降级到真实时间
             return real_clock_gettime(clk_id, tp);
         }
+        
+        // 移除clock_gettime响应日志
         
         // 解析响应中的虚拟时间
         json_error_t error;
@@ -1191,6 +1542,7 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
         if (!resp_payload_obj) {
             fprintf(stderr, "[LIBDESHOOK ERROR] R%d clock_gettime() failed to parse response.\n", 
                     my_router_id);
+            fflush(stderr);
             return real_clock_gettime(clk_id, tp);
         }
         
@@ -1198,12 +1550,24 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
         if (!vtime_json || !json_is_number(vtime_json)) {
             fprintf(stderr, "[LIBDESHOOK ERROR] R%d clock_gettime() no virtual time in response.\n", 
                     my_router_id);
+            fflush(stderr);
             json_decref(resp_payload_obj);
             return real_clock_gettime(clk_id, tp);
         }
         
         double vtime_sec = json_number_value(vtime_json);
         json_decref(resp_payload_obj);
+        
+        total_clock_calls++;
+        
+        // 临时开启返回值日志 + 检测时间跳跃
+        if ((clock_call_count % 10) == 0) {
+            double time_delta = (last_reported_vtime >= 0) ? (vtime_sec - last_reported_vtime) : 0;
+            printf("[LIBDESHOOK] R%d clock_gettime() returning VT=%.3f (delta=%.3f, total_calls=%llu)\n",
+                   my_router_id, vtime_sec, time_delta, total_clock_calls);
+            fflush(stdout);
+            last_reported_vtime = vtime_sec;
+        }
         
         // 转换为timespec
         if (tp) {

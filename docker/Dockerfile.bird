@@ -1,0 +1,63 @@
+# Dockerfile for BIRD routing daemon
+# 基于Ubuntu构建，包含BIRD 3.x (从源码编译)
+
+FROM ubuntu:latest
+
+# 避免交互式提示
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 安装编译依赖和必要工具
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    autoconf \
+    automake \
+    bison \
+    flex \
+    m4 \
+    libreadline-dev \
+    libncurses5-dev \
+    libssh-dev \
+    git \
+    ca-certificates \
+    iputils-ping \
+    iproute2 \
+    net-tools \
+    tcpdump \
+    vim \
+    ltrace \
+    strace \
+    netcat-openbsd \
+    libjansson4 \
+    gdb \
+    binutils \
+    less \
+    && rm -rf /var/lib/apt/lists/*
+
+# 下载并编译BIRD 3.x (最新稳定版)
+RUN cd /tmp && \
+    git clone --depth 1 --branch v3.1.4 https://gitlab.nic.cz/labs/bird.git bird3 && \
+    cd bird3 && \
+    autoreconf && \
+    ./configure --prefix=/usr --sysconfdir=/etc/bird --localstatedir=/var && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && \
+    rm -rf /tmp/bird3
+
+# 创建BIRD配置目录和运行时目录
+RUN mkdir -p /etc/bird /var/log /run/bird
+
+# BIRD 3.x 会直接安装为 bird 和 birdc，无需额外符号链接
+# 但为了向后兼容，确保路径正确
+RUN which bird && which birdc
+
+# 默认配置文件（如果没有挂载的话）
+RUN echo 'router id 1.1.1.1;' > /etc/bird/bird.conf && \
+    echo 'protocol device {}' >> /etc/bird/bird.conf && \
+    echo 'protocol kernel { ipv4 { export all; }; }' >> /etc/bird/bird.conf
+
+# 工作目录
+WORKDIR /root
+
+# 默认命令（保持容器运行）
+CMD ["/bin/bash"]

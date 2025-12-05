@@ -115,7 +115,7 @@ void send_timeout_response(int router_id, const char* request_id, const char* ti
 void send_eagain_response(int router_id, const char* request_id);
 
 // Connection management helper functions
-int find_router_by_listen_address(const char *address);
+int find_router_by_listen_address(const char *address, int caller_router_id);
 void register_connection(int router_id, int socket_fd, int peer_router_id, int peer_socket_fd);
 int find_peer_router(int router_id, int socket_fd);
 
@@ -125,6 +125,10 @@ int find_peer_router(int router_id, int socket_fd);
 
 // --- Main ---
 int main() {
+    // 设置stdout和stderr为无缓冲，确保日志立即输出
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    
     init_desd();
 
     // Setup control socket for initial connections
@@ -278,12 +282,57 @@ void cleanup_desd() {
 // --- Connection Management Helper Functions ---
 
 // 根据监听地址查找路由器ID
-int find_router_by_listen_address(const char *address) {
+int find_router_by_listen_address(const char *address, int caller_router_id) {
+    // 提取目标地址的端口
+    const char *target_port = strrchr(address, ':');
+    if (!target_port) {
+        // 没有端口，使用精确匹配（用于UDS路径）
+        for (int i = 1; i <= MAX_ROUTERS; i++) {
+            // 排除发起连接的router自己，避免自连接
+            if (i == caller_router_id) {
+                continue;
+            }
+            for (int j = 0; j < router_states[i].listen_count; j++) {
+                if (strcmp(router_states[i].listen_addresses[j], address) == 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+    
+    // 对于TCP地址（包含端口）
+    // 1. 先尝试精确IP+端口匹配（优先级高）
     for (int i = 1; i <= MAX_ROUTERS; i++) {
-        // 遍历该路由器的所有监听地址
+        // 排除发起连接的router自己
+        if (i == caller_router_id) {
+            continue;
+        }
         for (int j = 0; j < router_states[i].listen_count; j++) {
-            if (strcmp(router_states[i].listen_addresses[j], address) == 0) {
-                return i;  // 找到匹配的路由器
+            const char *listen_addr = router_states[i].listen_addresses[j];
+            // 精确匹配
+            if (strcmp(listen_addr, address) == 0) {
+                return i;
+            }
+        }
+    }
+    
+    // 2. 如果没有精确匹配，尝试0.0.0.0匹配
+    for (int i = 1; i <= MAX_ROUTERS; i++) {
+        // 排除发起连接的router自己
+        if (i == caller_router_id) {
+            continue;
+        }
+        for (int j = 0; j < router_states[i].listen_count; j++) {
+            const char *listen_addr = router_states[i].listen_addresses[j];
+            // 检查是否监听在0.0.0.0（监听所有接口）
+            if (strncmp(listen_addr, "0.0.0.0:", 8) == 0) {
+                // 提取监听端口
+                const char *listen_port = listen_addr + 7; // 跳过"0.0.0.0"
+                // 比较端口是否相同
+                if (strcmp(listen_port, target_port) == 0) {
+                    return i;  // 0.0.0.0可以匹配任何IP的相同端口
+                }
             }
         }
     }
@@ -296,6 +345,8 @@ void register_connection(int router_id, int socket_fd, int peer_router_id, int p
         fprintf(stderr, "[DESD ERROR] register_connection: Invalid router_id %d\n", router_id);
         return;
     }
+    
+    // 简化：移除内部调试输出
     
     for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
         if (!router_states[router_id].connections[i].is_active) {
@@ -317,10 +368,12 @@ int find_peer_router(int router_id, int socket_fd) {
         return -1;
     }
     
+    // 移除详细的内部查找输出
     for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
-        if (router_states[router_id].connections[i].is_active &&
-            router_states[router_id].connections[i].socket_fd == socket_fd) {
-            return router_states[router_id].connections[i].peer_router_id;
+        if (router_states[router_id].connections[i].is_active) {
+            if (router_states[router_id].connections[i].socket_fd == socket_fd) {
+                return router_states[router_id].connections[i].peer_router_id;
+            }
         }
     }
     return -1;
@@ -513,10 +566,13 @@ int receive_blocking_from_router(int router_id, Message* msg_out) {
     buffer[bytes_received] = '\0';
 
     json_to_message(buffer, msg_out);
-    printf("[DESD] Received message (Type: %s, Event: %s, ReqID: %s) from R%d.\n",
-           msg_out->message_type == HOOK_TO_DESD ? "HOOK_TO_DESD" : "DESD_TO_HOOK",
-           event_type_to_string(msg_out->event_type), msg_out->request_id, router_id);
-
+    //GET_VIRTUAL_TIME_EVENT 不打印
+    if (msg_out->event_type != GET_VIRTUAL_TIME_EVENT) {
+        printf("[DESD] Received message (Type: %s, Event: %s, ReqID: %s) from R%d.\n",
+               msg_out->message_type == HOOK_TO_DESD ? "HOOK_TO_DESD" : "DESD_TO_HOOK",
+               event_type_to_string(msg_out->event_type), msg_out->request_id, router_id);
+    }
+    
     return 1; // Success
 }
 
@@ -558,9 +614,12 @@ void desd_event_loop() {
             continue;
         }
         current_virtual_time = current_event.timestamp;
-        printf("[DESD] Processing event %s for R%d at VT=%.3f (EventID: %lu)\n",
-               event_type_to_string(current_event.event_type),
-               current_event.router_id, current_virtual_time, current_event.event_id);
+        //GET_VIRTUAL_TIME_EVENT 不打印
+        if (current_event.event_type != GET_VIRTUAL_TIME_EVENT) {
+            printf("[DESD] Processing event %s for R%d at VT=%.3f (EventID: %lu)\n",
+                   event_type_to_string(current_event.event_type),
+                   current_event.router_id, current_virtual_time, current_event.event_id);
+        }
         
         // 记录路由器在处理事件前的状态
         // pthread_mutex_lock(&router_states_mutex);
@@ -586,7 +645,8 @@ void desd_event_loop() {
         int is_router_initiated_event = (
             current_event.event_type == PACKET_SEND_EVENT ||
             current_event.event_type == CONNECT_REQUEST_EVENT ||
-            current_event.event_type == ROUTER_BLOCK_REQUEST
+            current_event.event_type == ROUTER_BLOCK_REQUEST ||
+            current_event.event_type == GET_VIRTUAL_TIME_EVENT
         );
         
         int should_wait_for_next_event = (
@@ -597,7 +657,7 @@ void desd_event_loop() {
         // pthread_mutex_unlock(&router_states_mutex);
 
         if (should_wait_for_next_event) {
-            printf("[DESD] R%d is now RUNNING. Waiting for its next event...\n", current_event.router_id);
+            //printf("[DESD] R%d is now RUNNING. Waiting for its next event...\n", current_event.router_id);
             
             // 循环接收路由器的事件，直到收到一个需要放入队列的事件
             while (1) {
@@ -615,7 +675,7 @@ void desd_event_loop() {
                     break;
                 }
 
-                // 检查是否是需要立即处理的瞬时事件（如 LISTEN_EVENT, CONNECTION_INFO_EVENT, GET_VIRTUAL_TIME_EVENT）
+                // 检查是否是需要立即处理的瞬时事件（如 LISTEN_EVENT, CONNECTION_INFO_EVENT）
                 if (next_msg_from_router.event_type == LISTEN_EVENT) {
                     // 立即处理 LISTEN_EVENT，不放入事件队列
                     Event listen_event = {
@@ -646,21 +706,6 @@ void desd_event_loop() {
                     handle_connection_info_event(conn_info_event);
                     // 继续循环，等待下一个事件
                     continue;
-                } else if (next_msg_from_router.event_type == GET_VIRTUAL_TIME_EVENT) {
-                    // 立即处理 GET_VIRTUAL_TIME_EVENT，不放入事件队列
-                    Event get_time_event = {
-                        .timestamp = current_virtual_time,
-                        .router_id = next_msg_from_router.router_id,
-                        .event_type = GET_VIRTUAL_TIME_EVENT,
-                        .event_id = generate_event_id(),
-                        .payload = next_msg_from_router.payload
-                    };
-                    get_time_event.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
-                    printf("[DESD] R%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), responding with VT %.6f.\n",
-                           current_event.router_id, next_msg_from_router.request_id, current_virtual_time);
-                    handle_get_virtual_time_event(get_time_event);
-                    // 继续循环，等待下一个事件
-                    continue;
                 }
 
                 // 其他事件放入队列
@@ -669,6 +714,8 @@ void desd_event_loop() {
                 double event_timestamp = current_virtual_time;
                 if (next_msg_from_router.event_type == PACKET_SEND_EVENT) {
                     event_timestamp = current_virtual_time + 0.002; // 延迟 2ms，确保晚于 accept (0.001ms)
+                } else if (next_msg_from_router.event_type == GET_VIRTUAL_TIME_EVENT) {
+                    event_timestamp = current_virtual_time + 0; // 给GET_VIRTUAL_TIME_EVENT加上10ms，推进虚拟时间
                 }
                 
                 Event next_event = {
@@ -680,9 +727,12 @@ void desd_event_loop() {
                 };
                 next_event.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
                 push_event(next_event);
-                printf("[DESD] R%d generated event %s (ReqID: %s) at VT %.3f (EventID: %lu).\n",
-                       current_event.router_id, event_type_to_string(next_event.event_type),
-                       next_msg_from_router.request_id, event_timestamp, next_event.event_id);
+                // GET_VIRTUAL_TIME_EVENT 不打印
+                if(next_msg_from_router.event_type != GET_VIRTUAL_TIME_EVENT){
+                    printf("[DESD] R%d generated event %s (ReqID: %s) at VT %.3f (EventID: %lu).\n",
+                    current_event.router_id, event_type_to_string(next_event.event_type),
+                    next_msg_from_router.request_id, event_timestamp, next_event.event_id);
+                }
                 break;
             }
         }
@@ -719,6 +769,9 @@ void handle_event(Event event) {
             break;
         case TIMEOUT_EVENT:
             handle_timeout_event(event);
+            break;
+        case GET_VIRTUAL_TIME_EVENT:
+            handle_get_virtual_time_event(event);
             break;
         default:
             fprintf(stderr, "[DESD WARNING] Unknown event type in handle_event: %d\n", event.event_type);
@@ -794,6 +847,7 @@ void handle_listen_event(Event event) {
         router_states[router_id].listen_addresses[index][255] = '\0';
         router_states[router_id].listen_count++;
         
+        // LISTEN事件信息已在下面显示，移除DEBUG输出
         printf("[DESD] R%d is now listening on %s (total: %d address%s).\n", 
                router_id, listen_address_local, 
                router_states[router_id].listen_count,
@@ -849,18 +903,44 @@ void handle_connect_request_event(Event event) {
         double connection_established_time = current_virtual_time + connection_delay;
 
         // 使用监听地址查找目标路由器
-        int target_router_id = find_router_by_listen_address(destination_abstract_address_local);
+        // 简化：CONNECT信息在后面会显示
+        
+        int target_router_id = find_router_by_listen_address(destination_abstract_address_local, router_id);
 
         if (target_router_id == -1) {
             // 目标路由器没有 listen，连接失败
             fprintf(stderr, "[DESD ERROR] R%d attempted to connect to %s, but no router is listening on that address.\n",
                     router_id, destination_abstract_address_local);
+            // 错误时显示可用地址
+            printf("[DESD] Available listen addresses:\n");
+            for (int r = 1; r <= MAX_ROUTERS; r++) {
+                if (router_states[r].listen_count > 0) {
+                    printf("[DESD]   R%d listening on:", r);
+                    for (int j = 0; j < router_states[r].listen_count; j++) {
+                        printf(" %s", router_states[r].listen_addresses[j]);
+                    }
+                    printf("\n");
+                }
+            }
             send_error_response(router_id, request_id, "Connection refused: Target not listening");
             router_states[router_id].status = RUNNING; // 错误发生，解除阻塞
             memset(router_states[router_id].blocked_on_request_id, 0, sizeof(router_states[router_id].blocked_on_request_id));
             memset(router_states[router_id].blocked_on_function, 0, sizeof(router_states[router_id].blocked_on_function));
             return;
         }
+        
+        // 额外的自连接检测（理论上不应该发生，因为find函数已经排除了）
+        if (target_router_id == router_id) {
+            fprintf(stderr, "[DESD ERROR] Self-connection detected! R%d trying to connect to itself at %s\n",
+                    router_id, destination_abstract_address_local);
+            send_error_response(router_id, request_id, "Connection refused: Cannot connect to self");
+            router_states[router_id].status = RUNNING;
+            memset(router_states[router_id].blocked_on_request_id, 0, sizeof(router_states[router_id].blocked_on_request_id));
+            memset(router_states[router_id].blocked_on_function, 0, sizeof(router_states[router_id].blocked_on_function));
+            return;
+        }
+        
+        // 简化：只显示连接结果，不显示匹配过程
         
         // 为目标路由器（服务器）调度 CONNECTION_ESTABLISHED_EVENT
         json_t *target_payload_obj = json_object();
@@ -1895,7 +1975,7 @@ void handle_get_virtual_time_event(Event event) {
     free(payload_str);
     
     send_message_to_router(router_id, &response);
-    
-    printf("[DESD] R%d GET_VIRTUAL_TIME_EVENT responded with VT=%.6f (ReqID: %s).\n", 
-           router_id, current_virtual_time, request_id_local);
+    //GET_VIRTUAL_TIME_EVENT 不打印
+    // printf("[DESD] R%d GET_VIRTUAL_TIME_EVENT responded with VT=%.6f (ReqID: %s).\n", 
+    //        router_id, current_virtual_time, request_id_local);
 }
