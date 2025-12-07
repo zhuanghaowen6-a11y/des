@@ -708,6 +708,12 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
             return data_len;
 
         } else if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
+                   strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "EOF") == 0) {
+            // 对端已关闭连接，返回0表示EOF
+            printf("[LIBDESHOOK] R%d recv() received EOF - peer closed connection.\n", my_router_id);
+            if (resp_payload_obj) json_decref(resp_payload_obj);
+            return 0;  // EOF: connection closed by peer
+        } else if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
                    strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "TIMEOUT") == 0) {
             printf("[LIBDESHOOK] R%d recv() timed out.\n", my_router_id);
             if (resp_payload_obj) json_decref(resp_payload_obj);
@@ -740,8 +746,6 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         return real_poll(fds, nfds, timeout);
     }
 
-    printf("[LIBDESHOOK] R%d intercepted poll() with %lu fds, timeout %d ms.\n", my_router_id, (unsigned long)nfds, timeout);
-
     // 🔒 线程安全：保护socket_fds数组的读取，创建一个本地副本
     // 避免在整个poll过程中持有锁，因为poll可能会阻塞很长时间
     int local_socket_fds[MAX_TRACKED_FDS];
@@ -757,21 +761,28 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         int fd = fds[i].fd;
         if (fd >= 0 && fd < MAX_TRACKED_FDS && local_socket_fds[fd]) {
             des_count++;
-            printf("[LIBDESHOOK] R%d poll(): fd %d is DES-managed socket\n", my_router_id, fd);
         } else {
             non_des_count++;
-            printf("[LIBDESHOOK] R%d poll(): fd %d is non-DES fd\n", my_router_id, fd);
         }
     }
     
-    printf("[LIBDESHOOK] R%d poll() split: %lu DES-managed, %lu non-DES\n", 
-           my_router_id, (unsigned long)des_count, (unsigned long)non_des_count);
-
-    // 如果没有DES管理的socket，直接使用real_poll
+    // 如果没有DES管理的socket，直接使用real_poll（不打印调试信息）
     if (des_count == 0) {
-        printf("[LIBDESHOOK] R%d poll() has no DES-managed sockets, using real_poll\n", my_router_id);
         return real_poll(fds, nfds, timeout);
     }
+
+    // 只有涉及DES-managed socket时才打印调试信息
+    printf("[LIBDESHOOK] R%d intercepted poll() with %lu fds, timeout %d ms.\n", my_router_id, (unsigned long)nfds, timeout);
+    
+    for (nfds_t i = 0; i < nfds; i++) {
+        int fd = fds[i].fd;
+        if (fd >= 0 && fd < MAX_TRACKED_FDS && local_socket_fds[fd]) {
+            printf("[LIBDESHOOK] R%d poll(): fd %d is DES-managed socket\n", my_router_id, fd);
+        }
+    }
+    
+    // printf("[LIBDESHOOK] R%d poll() split: %lu DES-managed, %lu non-DES\n", 
+    //        my_router_id, (unsigned long)des_count, (unsigned long)non_des_count);
 
     // 1. 对于非DES管理的fd，先用real_poll非阻塞检查
     int non_des_ready = 0;
@@ -791,8 +802,8 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         non_des_ready = real_poll(non_des_fds, non_des_count, 0);
         
         if (non_des_ready > 0) {
-            printf("[LIBDESHOOK] R%d poll() real_poll returned %d ready non-DES fds\n", 
-                   my_router_id, non_des_ready);
+            // printf("[LIBDESHOOK] R%d poll() real_poll returned %d ready non-DES fds\n", 
+            //        my_router_id, non_des_ready);
             // 将结果复制回原数组
             non_des_idx = 0;
             for (nfds_t i = 0; i < nfds; i++) {
@@ -908,8 +919,12 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
                             for (nfds_t i = 0; i < nfds; i++) {
                                 if (fds[i].fd == ready_fd) {
                                     // 只设置客户端请求的事件类型
-                                    fds[i].revents = ready_revents & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
-                                    des_ready_count++;
+                                    short filtered_revents = ready_revents & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
+                                    fds[i].revents = filtered_revents;
+                                    // 只有过滤后仍有事件，才累加计数（防御性编程）
+                                    if (filtered_revents != 0) {
+                                        des_ready_count++;
+                                    }
                                     break;
                                 }
                             }
@@ -1173,21 +1188,73 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
     }
 }
 
-// close - 简单拦截，不与DESD交互，但需要清理FD跟踪标记
+// close - 拦截并通知DESD socket关闭，清理FD跟踪标记
 int close(int sockfd) {
     printf("[LIBDESHOOK] R%d intercepted close() for sockfd %d.\n", my_router_id, sockfd);
     
+    // 检查是否是DES管理的socket
+    int is_des_socket = 0;
+    if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
+        pthread_mutex_lock(&socket_fds_mutex);
+        is_des_socket = socket_fds[sockfd];
+        pthread_mutex_unlock(&socket_fds_mutex);
+    }
+    
+    // 如果是DES管理的socket，通知DESD并等待响应
+    if (is_des_socket && desd_control_socket_fd != -1) {
+        printf("[LIBDESHOOK] R%d notifying DESD of socket close for fd %d.\n", my_router_id, sockfd);
+        
+        // 构建CLOSE_SOCKET_EVENT消息
+        Message close_msg;
+        memset(&close_msg, 0, sizeof(Message));
+        close_msg.message_type = HOOK_TO_DESD;
+        close_msg.router_id = my_router_id;
+        close_msg.event_type = CLOSE_SOCKET_EVENT;
+        close_msg.virtual_time = current_virtual_time;
+        generate_request_id(close_msg.request_id);
+        
+        json_t *payload_obj = json_object();
+        json_object_set_new(payload_obj, "socket_fd", json_integer(sockfd));
+        json_object_set_new(payload_obj, "request_id", json_string(close_msg.request_id));
+        char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
+        strncpy(close_msg.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+        close_msg.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+        free(payload_str);
+        json_decref(payload_obj);
+        
+        // 发送给DESD并等待响应（保持DES框架的同步性）
+        Message close_resp;
+        if (send_msg_to_desd_and_wait_for_response(&close_msg, &close_resp)) {
+            json_error_t error;
+            json_t *resp_payload_obj = json_loads(close_resp.payload.json_str, 0, &error);
+            if (resp_payload_obj) {
+                const char *status = json_string_value(json_object_get(resp_payload_obj, "status"));
+                if (status && strcmp(status, "SUCCESS") == 0) {
+                    printf("[LIBDESHOOK] R%d close() confirmed by DESD for fd %d.\n", my_router_id, sockfd);
+                } else {
+                    fprintf(stderr, "[LIBDESHOOK WARNING] R%d close() for fd %d, DESD response: %s\n", 
+                            my_router_id, sockfd, status ? status : "UNKNOWN");
+                }
+                json_decref(resp_payload_obj);
+            }
+        } else {
+            fprintf(stderr, "[LIBDESHOOK ERROR] R%d failed to get response from DESD for close(fd %d).\n", 
+                    my_router_id, sockfd);
+        }
+    }
+    
     // 清理FD跟踪标记
     if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
+        pthread_mutex_lock(&socket_fds_mutex);
         if (socket_fds[sockfd] || nonblocking_fds[sockfd]) {
             printf("[LIBDESHOOK] R%d clearing tracking for fd %d (socket:%d, nonblocking:%d).\n", 
                    my_router_id, sockfd, socket_fds[sockfd], nonblocking_fds[sockfd]);
         }
         socket_fds[sockfd] = 0;
         nonblocking_fds[sockfd] = 0;
+        pthread_mutex_unlock(&socket_fds_mutex);
     }
     
-    // 理论上可以通知DESD，但对于简单仿真可以忽略
     return real_close(sockfd);
 }
 
@@ -1276,6 +1343,7 @@ int listen(int sockfd, int backlog) {
 
     json_t *payload_obj = json_object();
     json_object_set_new(payload_obj, "listen_address", json_string(listen_address));
+    json_object_set_new(payload_obj, "socket_fd", json_integer(sockfd));
     json_object_set_new(payload_obj, "request_id", json_string(listen_msg.request_id));
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     strncpy(listen_msg.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
