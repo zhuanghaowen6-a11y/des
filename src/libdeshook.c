@@ -658,7 +658,7 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
     json_t *payload_obj = json_object();
     json_object_set_new(payload_obj, "blocked_function", json_string("RECV_CALL"));
     json_object_set_new(payload_obj, "request_id", json_string(recv_block_req.request_id));
-    json_object_set_new(payload_obj, "sockfd", json_integer(sockfd)); // 传递sockfd信息，可能用于desd调度select
+    json_object_set_new(payload_obj, "socket_fd", json_integer(sockfd)); // 修复：字段名改为socket_fd，与desd保持一致
     json_object_set_new(payload_obj, "nonblocking", json_boolean(is_nonblocking)); // 传递非阻塞标志
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     strncpy(recv_block_req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
