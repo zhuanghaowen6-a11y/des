@@ -418,23 +418,54 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
         json_t *resp_payload_obj = json_loads(block_resp.payload.json_str, 0, &error);
 
         json_t *status_json = NULL;
+        unsigned long connection_id = 0;
+        int client_router_id = 0;
+        int client_socket_fd = 0;
+        
         if (resp_payload_obj) {
             status_json = json_object_get(resp_payload_obj, "status");
+            // 提取connection_id和client信息
+            json_t *conn_id_json = json_object_get(resp_payload_obj, "connection_id");
+            if (conn_id_json && json_is_integer(conn_id_json)) {
+                connection_id = (unsigned long)json_integer_value(conn_id_json);
+            }
+            json_t *client_rid_json = json_object_get(resp_payload_obj, "client_router_id");
+            if (client_rid_json && json_is_integer(client_rid_json)) {
+                client_router_id = json_integer_value(client_rid_json);
+            }
+            json_t *client_fd_json = json_object_get(resp_payload_obj, "client_socket_fd");
+            if (client_fd_json && json_is_integer(client_fd_json)) {
+                client_socket_fd = json_integer_value(client_fd_json);
+            }
         }
 
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
             
-            printf("[LIBDESHOOK] R%d accept() unblocked by DESD. Now performing real accept.\n", my_router_id);
+            printf("[LIBDESHOOK] R%d accept() unblocked by DESD (conn_id=%lu from R%d). Now performing real accept.\n", 
+                   my_router_id, connection_id, client_router_id);
+            fflush(stdout);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             
             // 2. DESD解除阻塞后，调用真实的accept()
+            printf("[LIBDESHOOK-DEBUG] R%d calling real_accept() on sockfd=%d...\n", my_router_id, sockfd);
+            fflush(stdout);
             int new_fd = real_accept(sockfd, addr, addrlen);
+            printf("[LIBDESHOOK-DEBUG] R%d real_accept() returned: new_fd=%d, errno=%d (%s)\n", 
+                   my_router_id, new_fd, errno, new_fd < 0 ? strerror(errno) : "success");
+            fflush(stdout);
             if (new_fd < 0) {
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d real_accept() FAILED on sockfd=%d: errno=%d (%s)\n",
+                        my_router_id, sockfd, errno, strerror(errno));
+                fflush(stderr);
                 return new_fd;  // accept 失败，直接返回
             }
             
             // 3. accept 成功，发送 CONNECTION_INFO_EVENT 给 desd，通知新连接的 fd
+            printf("[LIBDESHOOK-DEBUG] R%d accept() SUCCESS, new_fd=%d, preparing to send CONNECTION_INFO_EVENT...\n",
+                   my_router_id, new_fd);
+            fflush(stdout);
+            
             Message conn_info;
             memset(&conn_info, 0, sizeof(Message));
             conn_info.message_type = HOOK_TO_DESD;
@@ -446,6 +477,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
             json_t *conn_payload_obj = json_object();
             json_object_set_new(conn_payload_obj, "socket_fd", json_integer(new_fd));
             json_object_set_new(conn_payload_obj, "listen_fd", json_integer(sockfd));
+            json_object_set_new(conn_payload_obj, "connection_id", json_integer(connection_id));
             json_object_set_new(conn_payload_obj, "request_id", json_string(conn_info.request_id));
             char *conn_payload_str = json_dumps(conn_payload_obj, JSON_COMPACT);
             strncpy(conn_info.payload.json_str, conn_payload_str, MAX_MSG_SIZE - 1);
@@ -453,11 +485,22 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
             free(conn_payload_str);
             json_decref(conn_payload_obj);
             
+            printf("[LIBDESHOOK-DEBUG] R%d sending CONNECTION_INFO_EVENT to DESD (req_id=%s, new_fd=%d, conn_id=%lu)...\n",
+                   my_router_id, conn_info.request_id, new_fd, connection_id);
+            fflush(stdout);
+            
+            printf("[LIBDESHOOK-DEBUG] R%d sending CONNECTION_INFO_EVENT (req_id=%s) for conn_id=%lu\n", 
+                   my_router_id, conn_info.request_id, connection_id);
+            fflush(stdout);
+            
             Message conn_resp;
             if (send_msg_to_desd_and_wait_for_response(&conn_info, &conn_resp)) {
-                printf("[LIBDESHOOK] R%d notified DESD of new connection fd %d.\n", my_router_id, new_fd);
+                printf("[LIBDESHOOK] R%d notified DESD of new connection fd %d. Response received.\n", my_router_id, new_fd);
+                fflush(stdout);
             } else {
                 fprintf(stderr, "[LIBDESHOOK WARNING] R%d failed to notify DESD of new connection.\n", my_router_id);
+                printf("[LIBDESHOOK-DEBUG] R%d send_msg_to_desd_and_wait_for_response failed for CONNECTION_INFO\n", my_router_id);
+                fflush(stdout);
             }
             
             // 标记新连接的socket为DES管理
@@ -842,9 +885,7 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
     json_t *payload_obj = json_object();
     json_object_set_new(payload_obj, "blocked_function", json_string("SELECT_CALL"));
     json_object_set_new(payload_obj, "request_id", json_string(poll_block_req.request_id));
-    if (timeout > 0) {
-        json_object_set_new(payload_obj, "timeout_ms", json_integer(timeout));
-    }
+    json_object_set_new(payload_obj, "timeout_ms", json_integer(timeout));
     
     // 只传递DES管理的socket fd
     json_t *monitored_fds_array = json_array();
