@@ -24,6 +24,7 @@
 #define MAX_TRACKED_FDS 1024
 static int socket_fds[MAX_TRACKED_FDS] = {0}; // 1表示是socket (仅AF_INET/AF_INET6)
 static int nonblocking_fds[MAX_TRACKED_FDS] = {0}; // 1表示设置了O_NONBLOCK
+static int connecting_fds[MAX_TRACKED_FDS] = {0}; // 1表示已发送过CONNECT_REQUEST（正在连接中）
 int my_router_id = -1;
 int desd_control_socket_fd = -1;
 static unsigned long long total_clock_calls = 0;
@@ -300,6 +301,34 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
            my_router_id, abstract_address, addr->sa_family == AF_UNIX ? "AF_UNIX" : "AF_INET");
     fflush(stdout);
 
+    // 🔥 关键修复：检查这个 fd 是否已经在连接过程中（非阻塞 connect 的重试调用）
+    // 典型模式：第一次 connect() 返回 EINPROGRESS，后续调用检查连接状态
+    // 对于这种情况，不应该发送新的 CONNECT_REQUEST_EVENT，直接调用 real_connect()
+    if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS && connecting_fds[sockfd]) {
+        printf("[LIBDESHOOK] R%d connect() on fd %d: already in connecting state, skipping CONNECT_REQUEST (non-blocking retry).\n",
+               my_router_id, sockfd);
+        fflush(stdout);
+        
+        int result = real_connect(sockfd, addr, addrlen);
+        int saved_errno = errno;
+        printf("[LIBDESHOOK] R%d connect() retry real_connect returned: %d (errno=%d %s)\n",
+               my_router_id, result, saved_errno,
+               saved_errno == EINPROGRESS ? "EINPROGRESS" :
+               saved_errno == EISCONN ? "EISCONN" :
+               saved_errno == EALREADY ? "EALREADY" :
+               saved_errno == 0 ? "SUCCESS" : strerror(saved_errno));
+        fflush(stdout);
+        
+        // 如果连接成功或返回 EISCONN，清除 connecting 状态
+        if (result == 0 || saved_errno == EISCONN) {
+            connecting_fds[sockfd] = 0;
+            printf("[LIBDESHOOK] R%d fd %d connection completed, cleared connecting state.\n", my_router_id, sockfd);
+        }
+        
+        errno = saved_errno;
+        return result;
+    }
+
     // 1. 告知desd：发送CONNECT_REQUEST_EVENT事件
     Message connect_req;
     memset(&connect_req, 0, sizeof(Message));
@@ -357,6 +386,18 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
                    saved_errno == EISCONN ? "EISCONN" : 
                    saved_errno == 0 ? "SUCCESS" : strerror(saved_errno));
             fflush(stdout);
+            
+            // 🔥 关键：如果返回 EINPROGRESS，标记 fd 为"连接中"状态
+            // 后续对同一 fd 的 connect() 调用将跳过 CONNECT_REQUEST_EVENT
+            if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
+                if (saved_errno == EINPROGRESS) {
+                    connecting_fds[sockfd] = 1;
+                    printf("[LIBDESHOOK] R%d fd %d marked as connecting (EINPROGRESS).\n", my_router_id, sockfd);
+                } else if (result == 0) {
+                    // 连接立即成功，不需要标记
+                    connecting_fds[sockfd] = 0;
+                }
+            }
             
             printf("[LIBDESHOOK] R%d connect() returning result %d to BIRD\n", my_router_id, result);
             fflush(stdout);
@@ -451,14 +492,45 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
             printf("[LIBDESHOOK-DEBUG] R%d calling real_accept() on sockfd=%d...\n", my_router_id, sockfd);
             fflush(stdout);
             int new_fd = real_accept(sockfd, addr, addrlen);
+            int saved_errno = errno;  // 保存 real_accept() 返回时的 errno，避免后续调用覆盖
             printf("[LIBDESHOOK-DEBUG] R%d real_accept() returned: new_fd=%d, errno=%d (%s)\n", 
-                   my_router_id, new_fd, errno, new_fd < 0 ? strerror(errno) : "success");
+                   my_router_id, new_fd, saved_errno, new_fd < 0 ? strerror(saved_errno) : "success");
             fflush(stdout);
             if (new_fd < 0) {
                 fprintf(stderr, "[LIBDESHOOK ERROR] R%d real_accept() FAILED on sockfd=%d: errno=%d (%s)\n",
-                        my_router_id, sockfd, errno, strerror(errno));
+                        my_router_id, sockfd, saved_errno, strerror(saved_errno));
                 fflush(stderr);
-                return new_fd;  // accept 失败，直接返回
+                
+                // 关键修复：通知 DESD 这次 accept 失败，清理对应的虚拟连接
+                Message accept_fail;
+                memset(&accept_fail, 0, sizeof(Message));
+                accept_fail.message_type = HOOK_TO_DESD;
+                accept_fail.router_id = my_router_id;
+                accept_fail.event_type = CONNECTION_INFO_EVENT;  // 复用 CONNECTION_INFO_EVENT
+                accept_fail.virtual_time = current_virtual_time;
+                generate_request_id(accept_fail.request_id);
+                
+                json_t *fail_payload_obj = json_object();
+                json_object_set_new(fail_payload_obj, "socket_fd", json_integer(-1));  // -1 表示失败
+                json_object_set_new(fail_payload_obj, "connection_id", json_integer(connection_id));
+                json_object_set_new(fail_payload_obj, "accept_failed", json_boolean(1));  // 标记为失败
+                json_object_set_new(fail_payload_obj, "request_id", json_string(accept_fail.request_id));
+                char *fail_payload_str = json_dumps(fail_payload_obj, JSON_COMPACT);
+                strncpy(accept_fail.payload.json_str, fail_payload_str, MAX_MSG_SIZE - 1);
+                accept_fail.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+                free(fail_payload_str);
+                json_decref(fail_payload_obj);
+                
+                printf("[LIBDESHOOK] R%d notifying DESD of accept failure for conn_id=%lu\n",
+                       my_router_id, connection_id);
+                fflush(stdout);
+                
+                Message fail_resp;
+                send_msg_to_desd_and_wait_for_response(&accept_fail, &fail_resp);
+
+                // 恢复 real_accept() 的 errno，确保调用方（BIRD）看到正确的错误码
+                errno = saved_errno;
+                return new_fd;  // accept 失败，返回 -1
             }
             
             // 3. accept 成功，发送 CONNECTION_INFO_EVENT 给 desd，通知新连接的 fd
@@ -508,7 +580,9 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                 socket_fds[new_fd] = 1;
                 printf("[LIBDESHOOK] R%d marked accepted fd %d as DES-managed socket.\n", my_router_id, new_fd);
             }
-            
+
+            // 对于成功的accept，也恢复当时的errno（通常为0），避免被内部调用污染
+            errno = saved_errno;
             return new_fd;
 
         } else {
@@ -1269,12 +1343,13 @@ int close(int sockfd) {
     // 清理FD跟踪标记
     if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
         pthread_mutex_lock(&socket_fds_mutex);
-        if (socket_fds[sockfd] || nonblocking_fds[sockfd]) {
-            printf("[LIBDESHOOK] R%d clearing tracking for fd %d (socket:%d, nonblocking:%d).\n", 
-                   my_router_id, sockfd, socket_fds[sockfd], nonblocking_fds[sockfd]);
+        if (socket_fds[sockfd] || nonblocking_fds[sockfd] || connecting_fds[sockfd]) {
+            printf("[LIBDESHOOK] R%d clearing tracking for fd %d (socket:%d, nonblocking:%d, connecting:%d).\n", 
+                   my_router_id, sockfd, socket_fds[sockfd], nonblocking_fds[sockfd], connecting_fds[sockfd]);
         }
         socket_fds[sockfd] = 0;
         nonblocking_fds[sockfd] = 0;
+        connecting_fds[sockfd] = 0;  // 清除连接中状态
         pthread_mutex_unlock(&socket_fds_mutex);
     }
     

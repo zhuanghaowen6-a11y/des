@@ -1,0 +1,290 @@
+[LIBDESHOOK] R2 trying to connect to desd at /tmp/desd_control_socket
+[LIBDESHOOK] Connected to desd control socket (fd: 3).
+[LIBDESHOOK] R2 intercepted close() for sockfd 4.
+[LIBDESHOOK] Router 2 successfully registered and unblocked by desd. Starting normal operation.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 4: flags=0x800.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 5: flags=0x800.
+[LIBDESHOOK] R2 intercepted socket() call. Created fd: 6, domain: 1 (AF_UNIX), type: 1.
+[LIBDESHOOK] R2 connect() called: sockfd=6 family=1
+[LIBDESHOOK] R2 intercepted close() for sockfd 6.
+[LIBDESHOOK] R2 intercepted socket() call. Created fd: 6, domain: 1 (AF_UNIX), type: 1.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 6: flags=0x800.
+[LIBDESHOOK] R2 listen() called: sockfd=6
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> device1: Initializing
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> device1: Starting
+[LIBDESHOOK] R2 skipping listen() on internal socket: /var/run/bird.ctl
+[LIBDESHOOK] R2 intercepted close() for sockfd 7.
+[LIBDESHOOK] R2 intercepted socket() call. Created fd: 7, domain: 16 (AF_NETLINK), type: 3.
+[LIBDESHOOK] R2 intercepted socket() call. Created fd: 8, domain: 16 (AF_NETLINK), type: 3.
+[LIBDESHOOK] R2 intercepted socket() call. Created fd: 9, domain: 16 (AF_NETLINK), type: 3.
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> device1: Scanning interfaces
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> device1: initialized rte_src owner
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> device1: new rte_src ID 0L 1G, have 1 sources now
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> device1: State changed to up
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> kernel1: Initializing
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> kernel1: Starting
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> kernel1: initialized rte_src owner
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> kernel1: Enqueueing interface notification (2, 0000558bbe42b490, 00007ffa95132040)
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> kernel1: Enqueueing interface notification (2, 0000558bbe42b560, 00007ffa95132070)
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> kernel1: new rte_src ID 0L 2G, have 1 sources now
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> kernel1: State changed to up
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> static4: Initializing
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> static4: Starting
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> static4: initialized rte_src owner
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> static4: new rte_src ID 0L 3G, have 1 sources now
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> static4: State changed to up
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> static4.ipv4 > added [best] 192.168.2.0/24 ptr 00007ffa95130038 (0) src 0L 3G 0S id 1 blackhole
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: Initializing
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: Starting
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: initialized rte_src owner
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: new rte_src ID 0L 4G, have 1 sources now
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: Enqueueing interface notification (2, 0000558bbe42b490, 00007ffa951320a0)
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: Enqueueing interface notification (1, 0000558bbe3c7520, 00007ffa951320d0)
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: Enqueueing interface notification (1, 0000558bbe42b630, 00007ffa95132100)
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: Enqueueing interface notification (2, 0000558bbe42b560, 00007ffa95132130)
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: Enqueueing interface notification (1, 0000558bbe3c75d0, 00007ffa95132160)
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> direct1: State changed to up
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> r1: Initializing
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> r1: Starting
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> r1: initialized rte_src owner
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> r1: State changed to start
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> r3: Initializing
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> r3: Starting
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> r3: initialized rte_src owner
+bird: 2025-12-23 05:57:57.145 [0001] <TRACE> r3: State changed to start
+bird: 2025-12-23 05:57:57.145 [0001] <INFO> Started
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> kernel1: Processing interface notifications
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> kernel1 < interface lo goes up
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> kernel1 < interface eth0 goes up
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> direct1: Processing interface notifications
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> direct1 < interface lo goes up
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> direct1 < address 127.0.0.0/8 on interface lo added
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> direct1 < address ::1/128 on interface lo added
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> direct1 < interface eth0 goes up
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> direct1 < address 10.0.0.0/16 on interface eth0 added
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> direct1: new rte_src ID 2L 5G, have 2 sources now
+bird: 2025-12-23 05:57:57.147 [0001] <TRACE> direct1.ipv4 > added [best] 10.0.0.0/16 ptr 00007ffa95130078 (1) src 2L 5G 0S id 2 unicast
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 9: flags=0x800.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 10: flags=0x800.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 11: flags=0x800.
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 10)
+[LIBDESHOOK] R2 clock_gettime() returning VT=0.000 (delta=0.000, total_calls=10)
+bird: 2025-12-23 05:57:57.148 [0002] <TRACE> r1: Requesting listen socket at 0.0.0.0 port 179
+[LIBDESHOOK] R2 intercepted socket() call. Created fd: 12, domain: 2 (AF_INET), type: 1.
+[LIBDESHOOK] R2 marked fd 12 as DES-managed socket.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 12: flags=0x800.
+[LIBDESHOOK] R2 marked fd 12 as NON-BLOCKING.
+[LIBDESHOOK] R2 intercepted bind() to 0.0.0.0:179. Allowing real bind.
+[LIBDESHOOK] R2 listen() called: sockfd=12
+bird: 2025-12-23 05:57:57.148 [0001] <TRACE> r1: Created new listening socket: 0000558bbe432cc0
+[LIBDESHOOK] R2 intercepted listen() on sockfd 12.
+[LIBDESHOOK] R2 listen() registered with DESD on 0.0.0.0:179.
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 20)
+[LIBDESHOOK] R2 clock_gettime() returning VT=0.000 (delta=0.000, total_calls=20)
+bird: 2025-12-23 05:57:57.148 [0002] <TRACE> r1: Started
+bird: 2025-12-23 05:57:57.148 [0002] <TRACE> r1: Connect delayed by 5 seconds
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1: Scanning routing table
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4: Export state changed from DOWN to FEEDING
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4: Export state changed from FEEDING to PARTIAL
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4: route refresh begin: rr 1 set 1 valid 0 pruning 0 pruned 0
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1: Pruning table master4
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4: route refresh end: rr 1 set 1 valid 1 pruning 0 pruned 0
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4: Feeding 192.168.2.0/24
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4 < added 192.168.2.0/24 ptr 00007ffa95134050 (0) src 0L 3G 0S id 1 blackhole
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4: Feeding 10.0.0.0/16
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4 < added 10.0.0.0/16 ptr 00007ffa951340d0 (1) src 2L 5G 0S id 2 unicast
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4: Export state changed from PARTIAL to READY
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1.ipv4: Fed up
+bird: 2025-12-23 05:57:57.154 [0001] <TRACE> kernel1: Table master4 pruned
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 30)
+[LIBDESHOOK] R2 clock_gettime() returning VT=1.001 (delta=1.001, total_calls=29)
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 40)
+[LIBDESHOOK] R2 clock_gettime() returning VT=4.001 (delta=3.000, total_calls=39)
+bird: 2025-12-23 05:57:57.166 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 50)
+[LIBDESHOOK] R2 clock_gettime() returning VT=10.001 (delta=6.000, total_calls=49)
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 60)
+[LIBDESHOOK] R2 clock_gettime() returning VT=20.001 (delta=10.000, total_calls=59)
+bird: 2025-12-23 05:57:57.170 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 70)
+[LIBDESHOOK] R2 clock_gettime() returning VT=26.001 (delta=6.000, total_calls=69)
+bird: 2025-12-23 05:57:57.172 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 80)
+[LIBDESHOOK] R2 clock_gettime() returning VT=30.001 (delta=4.000, total_calls=79)
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 90)
+[LIBDESHOOK] R2 clock_gettime() returning VT=40.001 (delta=10.000, total_calls=89)
+bird: 2025-12-23 05:57:57.176 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 intercepted accept() on sockfd 12.
+[LIBDESHOOK] R2 accept() unblocked by DESD (conn_id=1 from R1). Now performing real accept.
+[LIBDESHOOK-DEBUG] R2 calling real_accept() on sockfd=12...
+[LIBDESHOOK-DEBUG] R2 real_accept() returned: new_fd=13, errno=0 (success)
+[LIBDESHOOK-DEBUG] R2 accept() SUCCESS, new_fd=13, preparing to send CONNECTION_INFO_EVENT...
+[LIBDESHOOK-DEBUG] R2 sending CONNECTION_INFO_EVENT to DESD (req_id=req_117_2, new_fd=13, conn_id=1)...
+[LIBDESHOOK-DEBUG] R2 sending CONNECTION_INFO_EVENT (req_id=req_117_2) for conn_id=1
+[LIBDESHOOK] R2 notified DESD of new connection fd 13. Response received.
+bird: 2025-12-23 05:57:57.178 [0001] <TRACE> r1: Incoming connection from 10.0.1.1 (port 45997) accepted
+[LIBDESHOOK] R2 marked accepted fd 13 as DES-managed socket.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 13: flags=0x800.
+[LIBDESHOOK] R2 marked fd 13 as NON-BLOCKING.
+[LIBDESHOOK] R2 write() on socket fd=13, forwarding to send().
+[LIBDESHOOK] R2 intercepted send() on sockfd 13, len 53.
+[LIBDESHOOK] R2 send() completed (data sent through DESD, len=53).
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 100)
+[LIBDESHOOK] R2 clock_gettime() returning VT=40.053 (delta=0.052, total_calls=99)
+[LIBDESHOOK] R2 intercepted accept() on sockfd 12.
+[LIBDESHOOK] R2 accept() unblocked by DESD (conn_id=4 from R3). Now performing real accept.
+[LIBDESHOOK-DEBUG] R2 calling real_accept() on sockfd=12...
+[LIBDESHOOK-DEBUG] R2 real_accept() returned: new_fd=14, errno=0 (success)
+[LIBDESHOOK-DEBUG] R2 accept() SUCCESS, new_fd=14, preparing to send CONNECTION_INFO_EVENT...
+[LIBDESHOOK-DEBUG] R2 sending CONNECTION_INFO_EVENT to DESD (req_id=req_128_2, new_fd=14, conn_id=4)...
+[LIBDESHOOK-DEBUG] R2 sending CONNECTION_INFO_EVENT (req_id=req_128_2) for conn_id=4
+[LIBDESHOOK] R2 notified DESD of new connection fd 14. Response received.
+bird: 2025-12-23 05:57:57.182 [0001] <WARN> BGP: Unexpected connect from unknown address 10.0.3.3 (port 33885)
+[LIBDESHOOK] R2 marked accepted fd 14 as DES-managed socket.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 14: flags=0x800.
+[LIBDESHOOK] R2 marked fd 14 as NON-BLOCKING.
+[LIBDESHOOK] R2 intercepted close() for sockfd 14.
+[LIBDESHOOK] R2 notifying DESD of socket close for fd 14.
+[LIBDESHOOK] R2 close() confirmed by DESD for fd 14.
+[LIBDESHOOK] R2 clearing tracking for fd 14 (socket:1, nonblocking:1, connecting:0).
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 110)
+[LIBDESHOOK] R2 clock_gettime() returning VT=43.201 (delta=3.148, total_calls=109)
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 120)
+[LIBDESHOOK] R2 clock_gettime() returning VT=50.001 (delta=6.800, total_calls=119)
+bird: 2025-12-23 05:57:57.198 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 130)
+[LIBDESHOOK] R2 clock_gettime() returning VT=56.001 (delta=6.000, total_calls=129)
+bird: 2025-12-23 05:57:57.199 [0001] <TRACE> device1: Scanning interfaces
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1: Scanning routing table
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1.ipv4: route refresh begin: rr 2 set 2 valid 1 pruning 0 pruned 0
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1.ipv4: Export state changed from READY to PARTIAL
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1: Pruning table master4
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1.ipv4: route refresh end: rr 2 set 2 valid 2 pruning 0 pruned 0
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1.ipv4: Feeding 192.168.2.0/24
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1.ipv4 < replaced 192.168.2.0/24 ptr 00007ffa95134050 (0) src 0L 3G 0S id 1 blackhole
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1.ipv4: Feeding 10.0.0.0/16
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1.ipv4 < replaced 10.0.0.0/16 ptr 00007ffa951340d0 (1) src 2L 5G 0S id 2 unicast
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1.ipv4: Export state changed from PARTIAL to READY
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1.ipv4: Fed up
+bird: 2025-12-23 05:57:57.200 [0001] <TRACE> kernel1: Table master4 pruned
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 140)
+[LIBDESHOOK] R2 clock_gettime() returning VT=61.001 (delta=5.000, total_calls=139)
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 150)
+[LIBDESHOOK] R2 clock_gettime() returning VT=70.001 (delta=9.000, total_calls=149)
+bird: 2025-12-23 05:57:57.202 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 160)
+[LIBDESHOOK] R2 clock_gettime() returning VT=76.001 (delta=6.000, total_calls=159)
+bird: 2025-12-23 05:57:57.203 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 170)
+[LIBDESHOOK] R2 clock_gettime() returning VT=83.001 (delta=7.000, total_calls=169)
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 180)
+[LIBDESHOOK] R2 clock_gettime() returning VT=90.001 (delta=7.000, total_calls=179)
+bird: 2025-12-23 05:57:57.205 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 190)
+[LIBDESHOOK] R2 clock_gettime() returning VT=96.001 (delta=6.000, total_calls=189)
+bird: 2025-12-23 05:57:57.207 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 200)
+[LIBDESHOOK] R2 clock_gettime() returning VT=103.001 (delta=7.000, total_calls=199)
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 210)
+[LIBDESHOOK] R2 clock_gettime() returning VT=110.001 (delta=7.000, total_calls=209)
+bird: 2025-12-23 05:57:57.213 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 intercepted accept() on sockfd 12.
+[LIBDESHOOK] R2 accept() unblocked by DESD (conn_id=5 from R3). Now performing real accept.
+[LIBDESHOOK-DEBUG] R2 calling real_accept() on sockfd=12...
+[LIBDESHOOK-DEBUG] R2 real_accept() returned: new_fd=14, errno=0 (success)
+[LIBDESHOOK-DEBUG] R2 accept() SUCCESS, new_fd=14, preparing to send CONNECTION_INFO_EVENT...
+[LIBDESHOOK-DEBUG] R2 sending CONNECTION_INFO_EVENT to DESD (req_id=req_276_2, new_fd=14, conn_id=5)...
+[LIBDESHOOK-DEBUG] R2 sending CONNECTION_INFO_EVENT (req_id=req_276_2) for conn_id=5
+[LIBDESHOOK] R2 notified DESD of new connection fd 14. Response received.
+bird: 2025-12-23 05:57:57.214 [0001] <WARN> BGP: Unexpected connect from unknown address 10.0.3.3 (port 39753)
+[LIBDESHOOK] R2 marked accepted fd 14 as DES-managed socket.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 14: flags=0x800.
+[LIBDESHOOK] R2 marked fd 14 as NON-BLOCKING.
+[LIBDESHOOK] R2 intercepted close() for sockfd 14.
+[LIBDESHOOK] R2 notifying DESD of socket close for fd 14.
+[LIBDESHOOK] R2 close() confirmed by DESD for fd 14.
+[LIBDESHOOK] R2 clearing tracking for fd 14 (socket:1, nonblocking:1, connecting:0).
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 220)
+[LIBDESHOOK] R2 clock_gettime() returning VT=113.051 (delta=3.050, total_calls=219)
+[LIBDESHOOK] R2 intercepted accept() on sockfd 12.
+[LIBDESHOOK] R2 accept() unblocked by DESD (conn_id=6 from R3). Now performing real accept.
+[LIBDESHOOK-DEBUG] R2 calling real_accept() on sockfd=12...
+[LIBDESHOOK-DEBUG] R2 real_accept() returned: new_fd=14, errno=0 (success)
+[LIBDESHOOK-DEBUG] R2 accept() SUCCESS, new_fd=14, preparing to send CONNECTION_INFO_EVENT...
+[LIBDESHOOK-DEBUG] R2 sending CONNECTION_INFO_EVENT to DESD (req_id=req_291_2, new_fd=14, conn_id=6)...
+[LIBDESHOOK-DEBUG] R2 sending CONNECTION_INFO_EVENT (req_id=req_291_2) for conn_id=6
+[LIBDESHOOK] R2 notified DESD of new connection fd 14. Response received.
+bird: 2025-12-23 05:57:57.232 [0001] <WARN> BGP: Unexpected connect from unknown address 10.0.3.3 (port 52357)
+[LIBDESHOOK] R2 marked accepted fd 14 as DES-managed socket.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 14: flags=0x800.
+[LIBDESHOOK] R2 marked fd 14 as NON-BLOCKING.
+[LIBDESHOOK] R2 intercepted close() for sockfd 14.
+[LIBDESHOOK] R2 notifying DESD of socket close for fd 14.
+[LIBDESHOOK] R2 close() confirmed by DESD for fd 14.
+[LIBDESHOOK] R2 clearing tracking for fd 14 (socket:1, nonblocking:1, connecting:0).
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 230)
+[LIBDESHOOK] R2 clock_gettime() returning VT=118.026 (delta=4.975, total_calls=229)
+bird: 2025-12-23 05:57:57.234 [0001] <TRACE> device1: Scanning interfaces
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1: Scanning routing table
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1.ipv4: route refresh begin: rr 3 set 3 valid 2 pruning 0 pruned 0
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1.ipv4: Export state changed from READY to PARTIAL
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1: Pruning table master4
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1.ipv4: route refresh end: rr 3 set 3 valid 3 pruning 0 pruned 0
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1.ipv4: Feeding 192.168.2.0/24
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1.ipv4 < replaced 192.168.2.0/24 ptr 00007ffa95134050 (0) src 0L 3G 0S id 1 blackhole
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1.ipv4: Feeding 10.0.0.0/16
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1.ipv4 < replaced 10.0.0.0/16 ptr 00007ffa951340d0 (1) src 2L 5G 0S id 2 unicast
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1.ipv4: Export state changed from PARTIAL to READY
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1.ipv4: Fed up
+bird: 2025-12-23 05:57:57.235 [0001] <TRACE> kernel1: Table master4 pruned
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 240)
+[LIBDESHOOK] R2 clock_gettime() returning VT=121.001 (delta=2.975, total_calls=239)
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 250)
+[LIBDESHOOK] R2 clock_gettime() returning VT=130.001 (delta=9.000, total_calls=249)
+bird: 2025-12-23 05:57:57.239 [0001] <TRACE> device1: Scanning interfaces
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 260)
+[LIBDESHOOK] R2 clock_gettime() returning VT=133.001 (delta=3.000, total_calls=259)
+bird: 2025-12-23 05:57:57.240 [0002] <TRACE> r1: Connecting to 10.0.1.1 from local address 10.0.2.2
+[LIBDESHOOK] R2 intercepted socket() call. Created fd: 14, domain: 2 (AF_INET), type: 1.
+[LIBDESHOOK] R2 marked fd 14 as DES-managed socket.
+[LIBDESHOOK] R2 fcntl(F_SETFL) on fd 14: flags=0x800.
+[LIBDESHOOK] R2 marked fd 14 as NON-BLOCKING.
+[LIBDESHOOK] R2 intercepted bind() to 10.0.2.2:0. Allowing real bind.
+[LIBDESHOOK] R2 connect() called: sockfd=14 family=2
+[LIBDESHOOK] R2 intercepted connect() to 10.0.1.1:179 (family: AF_INET).
+[LIBDESHOOK] R2 connect() sending CONNECT_REQUEST to desd...
+[LIBDESHOOK] R2 connect() to 10.0.1.1:179 successful (DESD confirmed). Now performing real connect.
+[LIBDESHOOK] R2 marked fd 14 as DES-managed socket (after connect).
+[LIBDESHOOK] R2 connect() real_connect returned: -1 (errno=115 EINPROGRESS)
+[LIBDESHOOK] R2 fd 14 marked as connecting (EINPROGRESS).
+[LIBDESHOOK] R2 connect() returning result -1 to BIRD
+bird: 2025-12-23 05:57:57.243 [0002] <TRACE> kernel1.ipv4: table prune after refresh begin: rr 3 set 3 valid 3 pruning 3 pruned 0
+bird: 2025-12-23 05:57:57.243 [0002] <TRACE> kernel1.ipv4: table prune after refresh end: rr 0 set 3 valid 3 pruning 3 pruned 3
+bird: 2025-12-23 05:57:57.243 [0002] <TRACE> r3: Requesting listen socket at 0.0.0.0 port 179
+bird: 2025-12-23 05:57:57.243 [0002] <TRACE> r3: Started
+bird: 2025-12-23 05:57:57.243 [0002] <TRACE> r3: Connect delayed by 5 seconds
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 270)
+[LIBDESHOOK] R2 clock_gettime() returning VT=133.050 (delta=0.049, total_calls=269)
+[LIBDESHOOK] R2 connect() called: sockfd=14 family=2
+[LIBDESHOOK] R2 intercepted connect() to 10.0.1.1:179 (family: AF_INET).
+[LIBDESHOOK] R2 connect() on fd 14: already in connecting state, skipping CONNECT_REQUEST (non-blocking retry).
+[LIBDESHOOK] R2 connect() retry real_connect returned: 0 (errno=0 SUCCESS)
+bird: 2025-12-23 05:57:57.243 [0002] <TRACE> r1: Connected
+[LIBDESHOOK] R2 fd 14 connection completed, cleared connecting state.
+[LIBDESHOOK] R2 read() on socket fd=13, forwarding to recv().
+[LIBDESHOOK] R2 intercepted recv() on sockfd 13, max len 4096.
+[LIBDESHOOK] R2 recv() on NON-BLOCKING socket fd 13.
+[LIBDESHOOK] R2 recv() unblocked by DESD. Receiving data from DESD.
+[LIBDESHOOK] R2 recv() completed (received 53 bytes from DESD).
+[LIBDESHOOK] R2 write() on socket fd=13, forwarding to send().
+[LIBDESHOOK] R2 intercepted send() on sockfd 13, len 19.
+[LIBDESHOOK] R2 send() completed (data sent through DESD, len=19).
+[LIBDESHOOK] R2 read() on socket fd=13, forwarding to recv().
+[LIBDESHOOK] R2 intercepted recv() on sockfd 13, max len 4096.
+[LIBDESHOOK] R2 recv() on NON-BLOCKING socket fd 13.
+[LIBDESHOOK] R2 recv() on non-blocking socket, no data available (EAGAIN).
+[LIBDESHOOK] R2 write() on socket fd=14, forwarding to send().
+[LIBDESHOOK] R2 intercepted send() on sockfd 14, len 53.
+[LIBDESHOOK] R2 send() completed (data sent through DESD, len=53).
+[LIBDESHOOK] R2 clock_gettime(CLOCK_MONOTONIC) called (count: 280)
+[LIBDESHOOK] R2 clock_gettime() returning VT=137.737 (delta=4.687, total_calls=279)

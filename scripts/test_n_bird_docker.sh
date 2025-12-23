@@ -194,6 +194,19 @@ for i in $(seq 1 $NUM_ROUTERS); do
 done
 log_info "✓ libdeshook.so已部署到所有容器"
 
+log_step "步骤6.5: 初始化 core dump 环境（禁用 apport）"
+
+for i in $(seq 1 $NUM_ROUTERS); do
+    sudo docker exec r$i bash -c "
+        echo core > /proc/sys/kernel/core_pattern
+        ulimit -c unlimited
+    "
+done
+
+log_info "✓ 所有容器已启用裸 core dump"
+
+
+
 log_step "步骤7: 启动desd"
 sudo rm -f /tmp/desd_control_socket /tmp/router_socket
 mkdir -p logs
@@ -227,6 +240,7 @@ log_info "并行启动 $NUM_ROUTERS 个BIRD进程..."
 # 并行启动所有BIRD进程，使用FIFO队列确保CONNECTION_INFO匹配正确
 for i in $(seq 1 $NUM_ROUTERS); do
     sudo docker exec -d r$i bash -c "
+        ulimit -c unlimited
         export LD_PRELOAD=/usr/local/lib/libdeshook.so
         export ROUTER_ID=$i
         bird -f -c /etc/bird/bird.conf > /var/log/bird_r${i}.log 2>&1

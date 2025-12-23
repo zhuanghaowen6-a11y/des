@@ -389,17 +389,18 @@ void register_connection(int router_id, int socket_fd, int peer_router_id, int p
         return;
     }
     
-    // 🔑 关键修复：先检查该socket_fd是否已经注册过
+    // 🔑 先检查该socket_fd是否已经注册过
     // 如果存在，更新而不是创建新记录（防止同一FD多次注册导致查找混乱）
     for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
         if (router_states[router_id].connections[i].is_active &&
             router_states[router_id].connections[i].socket_fd == socket_fd) {
-            // FD已存在，更新连接信息
-            printf("[DESD-UPDATE] R%d fd:%d already registered at slot %d, updating peer info\n", 
-                   router_id, socket_fd, i);
+            // FD已存在，更新连接信息（保留 connection_id，不要覆盖）
+            printf("[DESD-UPDATE] R%d fd:%d already registered at slot %d (conn_id=%lu), updating peer info\n", 
+                   router_id, socket_fd, i, router_states[router_id].connections[i].connection_id);
             router_states[router_id].connections[i].peer_router_id = peer_router_id;
             router_states[router_id].connections[i].peer_socket_fd = peer_socket_fd;
             router_states[router_id].connections[i].peer_closed = 0;
+            // 注意：不再重置 connection_id，保留原有的连接标识
             printf("[DESD] Updated connection: R%d (fd:%d) <-> R%d (fd:%d)\n", 
                    router_id, socket_fd, peer_router_id, peer_socket_fd);
             return;
@@ -445,21 +446,36 @@ int find_socket_fd_for_peer(int router_id, int peer_router_id, int peer_socket_f
         return -1;
     }
     
-    int potential_match = -1;
+    int potential_match_fd = -1;
+    unsigned long potential_match_conn_id = 0;
+    int potential_match_peer_closed = 0;
     int matches_found = 0;
 
     for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
         if (router_states[router_id].connections[i].is_active &&
             router_states[router_id].connections[i].peer_router_id == peer_router_id) {
+
+            int local_fd = router_states[router_id].connections[i].socket_fd;
+            int peer_fd = router_states[router_id].connections[i].peer_socket_fd;
+            unsigned long conn_id = router_states[router_id].connections[i].connection_id;
+            int peer_closed = router_states[router_id].connections[i].peer_closed;
+
+            // 详细记录当前候选条目，方便调试FD复用/映射问题
+            printf("[DESD-CONN-MAP] R%d candidate idx=%d local_fd=%d peer_rid=%d peer_fd=%d conn_id=%lu peer_closed=%d\n",
+                   router_id, i, local_fd, peer_router_id, peer_fd, conn_id, peer_closed);
             
             // 完美匹配：对端 FD 也对得上
-            if (router_states[router_id].connections[i].peer_socket_fd == peer_socket_fd) {
-                return router_states[router_id].connections[i].socket_fd;
+            if (peer_fd == peer_socket_fd) {
+                printf("[DESD-CONN-MAP] R%d PERFECT match for peer R%d: local_fd=%d peer_fd=%d conn_id=%lu peer_closed=%d\n",
+                       router_id, peer_router_id, local_fd, peer_fd, conn_id, peer_closed);
+                return local_fd;
             }
             
-            // 候选匹配：对端 FD 还是 -1（说明对端还未发送 CONNECTION_INFO_EVENT）
-            if (router_states[router_id].connections[i].peer_socket_fd == -1) {
-                potential_match = router_states[router_id].connections[i].socket_fd;
+            // 候选匹配：对端 FD 还是 -1（说明对端还未发送 CONNECTION_INFO_EVENT，或对端已关闭但记录未清理）
+            if (peer_fd == -1) {
+                potential_match_fd = local_fd;
+                potential_match_conn_id = conn_id;
+                potential_match_peer_closed = peer_closed;
                 matches_found++;
             }
         }
@@ -467,9 +483,10 @@ int find_socket_fd_for_peer(int router_id, int peer_router_id, int peer_socket_f
     
     // 如果没有完美匹配，但只有一个候选匹配，我们也认为是对的（适用于单连接或时序滞后场景）
     if (matches_found == 1) {
-        printf("[DESD-DEBUG] R%d using potential match fd %d for peer R%d (exact peer_fd %d not yet registered)\n",
-               router_id, potential_match, peer_router_id, peer_socket_fd);
-        return potential_match;
+        printf("[DESD-CONN-MAP] R%d using POTENTIAL match local_fd=%d for peer R%d (exact peer_fd %d not yet registered). potential_conn_id=%lu peer_closed=%d\n",
+               router_id, potential_match_fd, peer_router_id, peer_socket_fd,
+               potential_match_conn_id, potential_match_peer_closed);
+        return potential_match_fd;
     }
     
     return -1;
@@ -1191,6 +1208,34 @@ void handle_connection_established_event(Event event) {
         }
         // 对于 ACCEPT 方（接收连接的路由器）
         else {
+            // 立即为 server 端注册虚拟连接（模拟内核的 child socket 行为）
+            // 使用负数作为虚拟 fd，格式为 -(connection_id + 1000)
+            // 🔥 关键修复：使用偏移量避免与 -1（"未设置"标志）冲突
+            int virtual_server_fd = -(int)(connection_id + 1000);
+            register_connection(server_router_id, virtual_server_fd, client_router_id, client_socket_fd);
+            
+            // 设置 connection_id
+            for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+                if (router_states[server_router_id].connections[i].is_active &&
+                    router_states[server_router_id].connections[i].socket_fd == virtual_server_fd) {
+                    router_states[server_router_id].connections[i].connection_id = connection_id;
+                    break;
+                }
+            }
+            
+            // 同时更新 client 端的 peer_socket_fd（指向虚拟 fd）
+            for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+                if (router_states[client_router_id].connections[i].is_active &&
+                    router_states[client_router_id].connections[i].socket_fd == client_socket_fd &&
+                    router_states[client_router_id].connections[i].connection_id == connection_id) {
+                    router_states[client_router_id].connections[i].peer_socket_fd = virtual_server_fd;
+                    break;
+                }
+            }
+            
+            printf("[DESD] R%d (server) virtual connection registered: virtual_fd=%d <-> R%d (client) fd=%d (conn_id=%lu, pending accept).\n",
+                   server_router_id, virtual_server_fd, client_router_id, client_socket_fd, connection_id);
+            
             if (router_states[router_id].status == BLOCKED &&
                 strcmp(router_states[router_id].blocked_on_function, "ACCEPT_CALL") == 0) {
                 
@@ -1198,9 +1243,6 @@ void handle_connection_established_event(Event event) {
                 char router_request_id[64];
                 strncpy(router_request_id, router_states[router_id].blocked_on_request_id, 63);
                 router_request_id[63] = '\0';
-                
-                // 服务器端的连接映射将在 CONNECTION_INFO_EVENT 中注册
-                // （因为现在还不知道 accept() 返回的 socket_fd）
                 
                 router_states[router_id].status = RUNNING;
                 memset(router_states[router_id].blocked_on_request_id, 0, sizeof(router_states[router_id].blocked_on_request_id));
@@ -1331,9 +1373,72 @@ void handle_connection_info_event(Event event) {
     json_t *is_client_json = json_object_get(payload_obj, "is_client");
     int is_client = is_client_json && json_is_true(is_client_json);
     
-    printf("[DEBUG-CONN-INFO] R%d sent CONNECTION_INFO: socket_fd=%d, conn_id=%lu, is_client=%d\n",
-           router_id, socket_fd, connection_id, is_client);
+    // 检查是否是 accept 失败通知
+    json_t *accept_failed_json = json_object_get(payload_obj, "accept_failed");
+    int accept_failed = accept_failed_json && json_is_true(accept_failed_json);
+    
+    printf("[DEBUG-CONN-INFO] R%d sent CONNECTION_INFO: socket_fd=%d, conn_id=%lu, is_client=%d, accept_failed=%d\n",
+           router_id, socket_fd, connection_id, is_client, accept_failed);
     fflush(stdout);
+    
+    // 处理 accept 失败的情况：清理虚拟连接
+    if (accept_failed && socket_fd == -1) {
+        printf("[DESD] R%d accept FAILED for conn_id=%lu. Cleaning up virtual connection.\n",
+               router_id, connection_id);
+        
+        int virtual_server_fd = -(int)(connection_id + 1000);
+        int cleaned = 0;
+        
+        // 清理 server 端的虚拟连接
+        for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+            if (router_states[router_id].connections[i].is_active &&
+                router_states[router_id].connections[i].socket_fd == virtual_server_fd &&
+                router_states[router_id].connections[i].connection_id == connection_id) {
+                
+                int client_router_id = router_states[router_id].connections[i].peer_router_id;
+                int client_socket_fd = router_states[router_id].connections[i].peer_socket_fd;
+                
+                printf("[DESD] Removing virtual connection: R%d (virtual_fd:%d) <-> R%d (fd:%d), conn_id=%lu\n",
+                       router_id, virtual_server_fd, client_router_id, client_socket_fd, connection_id);
+                
+                // 删除 server 侧的虚拟连接
+                router_states[router_id].connections[i].is_active = 0;
+                router_states[router_id].connections[i].socket_fd = -1;
+                router_states[router_id].connections[i].peer_router_id = -1;
+                router_states[router_id].connections[i].peer_socket_fd = -1;
+                router_states[router_id].connections[i].connection_id = 0;
+                cleaned++;
+                
+                // 同时清理 client 端的 peer_socket_fd（从虚拟 fd 改回 -1）
+                if (client_router_id > 0 && client_router_id <= MAX_ROUTERS && client_socket_fd != -1) {
+                    for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                        if (router_states[client_router_id].connections[j].is_active &&
+                            router_states[client_router_id].connections[j].socket_fd == client_socket_fd &&
+                            router_states[client_router_id].connections[j].connection_id == connection_id) {
+                            
+                            printf("[DESD] Clearing client peer_socket_fd: R%d (fd:%d) peer_fd: %d -> -1\n",
+                                   client_router_id, client_socket_fd, virtual_server_fd);
+                            router_states[client_router_id].connections[j].peer_socket_fd = -1;
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        
+        if (cleaned > 0) {
+            printf("[DESD] R%d cleaned %d virtual connection(s) for failed accept (conn_id=%lu).\n",
+                   router_id, cleaned, connection_id);
+        } else {
+            printf("[DESD WARNING] R%d could not find virtual connection to clean for conn_id=%lu\n",
+                   router_id, connection_id);
+        }
+        
+        json_decref(payload_obj);
+        send_success_response(router_id, request_id, "CONNECTION_INFO", "Accept failure processed", NULL);
+        return;
+    }
     
     if (is_client) {
         // 客户端发送的 CONNECTION_INFO_EVENT
@@ -1395,62 +1500,104 @@ void handle_connection_info_event(Event event) {
         }
     } else {
         // 服务端发送的 CONNECTION_INFO_EVENT
-        // 使用connection_id进行精确匹配
+        // 查找并替换之前注册的虚拟连接（virtual_fd 为负数）
         int client_router_id = -1;
         int peer_socket_fd = -1;
+        int virtual_server_fd = -(int)(connection_id + 1000);
+        int found_virtual_connection = 0;
         
-        printf("[DEBUG-CONN-INFO] R%d (server) sending CONNECTION_INFO for fd=%d, conn_id=%lu\n", 
-               router_id, socket_fd, connection_id);
+        printf("[DEBUG-CONN-INFO] R%d (server) sending CONNECTION_INFO for fd=%d, conn_id=%lu (looking for virtual_fd=%d)\n", 
+               router_id, socket_fd, connection_id, virtual_server_fd);
         
-        // 遍历所有路由器，查找匹配的connection_id
-        for (int rid = 1; rid <= MAX_ROUTERS; rid++) {
-            if (rid == router_id || router_states[rid].comm_socket_fd == -1) continue;
-            
-            // 在该路由器的连接表中查找匹配的connection_id
-            for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
-                if (router_states[rid].connections[i].is_active &&
-                    router_states[rid].connections[i].connection_id == connection_id &&
-                    router_states[rid].connections[i].peer_router_id == router_id) {
-                    
-                    // 找到了！用connection_id精确匹配
-                    client_router_id = rid;
-                    peer_socket_fd = router_states[rid].connections[i].socket_fd;
-                    
-                    // 如果客户端已经有了 peer_socket_fd 记录，且不是当前这个 fd，打印警告
-                    if (router_states[rid].connections[i].peer_socket_fd != -1 && 
-                        router_states[rid].connections[i].peer_socket_fd != socket_fd) {
-                        printf("[DESD WARNING] R%d (client) connection %lu already has peer_socket_fd=%d, but R%d (server) says it's %d\n",
-                               rid, connection_id, router_states[rid].connections[i].peer_socket_fd, router_id, socket_fd);
-                    }
-                    
-                    router_states[rid].connections[i].peer_socket_fd = socket_fd;
-                    printf("[CONN-ID-MATCH] R%d (server) fd=%d MATCHED with R%d (client) fd=%d using conn_id=%lu\n",
-                           router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
-                    break;
-                }
-            }
-            if (client_router_id != -1) break;
-        }
-        
-        // 注册服务器端的连接
-        register_connection(router_id, socket_fd, client_router_id, peer_socket_fd);
-        // 设置connection_id
+        // 首先在 server 端查找虚拟连接
         for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
             if (router_states[router_id].connections[i].is_active &&
-                router_states[router_id].connections[i].socket_fd == socket_fd) {
-                router_states[router_id].connections[i].connection_id = connection_id;
+                router_states[router_id].connections[i].socket_fd == virtual_server_fd &&
+                router_states[router_id].connections[i].connection_id == connection_id) {
+                
+                // 找到了虚拟连接！
+                client_router_id = router_states[router_id].connections[i].peer_router_id;
+                peer_socket_fd = router_states[router_id].connections[i].peer_socket_fd;
+                
+                printf("[DESD] R%d (server) found virtual connection: virtual_fd=%d -> replacing with real_fd=%d (conn_id=%lu)\n",
+                       router_id, virtual_server_fd, socket_fd, connection_id);
+                
+                // 替换虚拟 fd 为真实 fd
+                router_states[router_id].connections[i].socket_fd = socket_fd;
+                found_virtual_connection = 1;
+                
+                // 同时更新 client 端的 peer_socket_fd（从虚拟 fd 改为真实 fd）
+                if (client_router_id > 0 && client_router_id <= MAX_ROUTERS && peer_socket_fd != -1) {
+                    for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                        if (router_states[client_router_id].connections[j].is_active &&
+                            router_states[client_router_id].connections[j].socket_fd == peer_socket_fd &&
+                            router_states[client_router_id].connections[j].connection_id == connection_id) {
+                            
+                            router_states[client_router_id].connections[j].peer_socket_fd = socket_fd;
+                            printf("[DESD] R%d (client) peer_socket_fd updated: %d -> %d\n",
+                                   client_router_id, virtual_server_fd, socket_fd);
+                            break;
+                        }
+                    }
+                }
+                
+                // 关键修复：更新所有已缓冲的数据包的 socket_fd（从虚拟 fd 改为真实 fd）
+                int updated_packets = 0;
+                for (int j = 0; j < MAX_PENDING_PACKETS; j++) {
+                    if (router_states[router_id].packet_buffers[j].is_used &&
+                        router_states[router_id].packet_buffers[j].socket_fd == virtual_server_fd) {
+                        router_states[router_id].packet_buffers[j].socket_fd = socket_fd;
+                        updated_packets++;
+                    }
+                }
+                if (updated_packets > 0) {
+                    printf("[DESD] R%d (server) updated %d buffered packet(s): socket_fd %d -> %d\n",
+                           router_id, updated_packets, virtual_server_fd, socket_fd);
+                }
+                
+                printf("[DESD] R%d (server) connection updated: real_fd=%d <-> R%d (client) fd=%d (conn_id=%lu).\n",
+                       router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
                 break;
             }
         }
         
-        if (peer_socket_fd != -1) {
-            printf("[DESD] R%d (server) registered connection: fd %d <-> R%d (client) fd %d (conn_id=%lu).\n", 
+        if (!found_virtual_connection) {
+            // 如果没找到虚拟连接，说明出现了异常情况
+            // 尝试通过 connection_id 查找 client 端连接
+            printf("[DESD WARNING] R%d (server) virtual connection not found for conn_id=%lu, virtual_fd=%d. Searching for client connection...\n",
+                   router_id, connection_id, virtual_server_fd);
+            
+            for (int rid = 1; rid <= MAX_ROUTERS; rid++) {
+                if (rid == router_id || router_states[rid].comm_socket_fd == -1) continue;
+                
+                for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+                    if (router_states[rid].connections[i].is_active &&
+                        router_states[rid].connections[i].connection_id == connection_id &&
+                        router_states[rid].connections[i].peer_router_id == router_id) {
+                        
+                        client_router_id = rid;
+                        peer_socket_fd = router_states[rid].connections[i].socket_fd;
+                        router_states[rid].connections[i].peer_socket_fd = socket_fd;
+                        printf("[CONN-ID-MATCH] R%d (server) fd=%d MATCHED with R%d (client) fd=%d using conn_id=%lu\n",
+                               router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
+                        break;
+                    }
+                }
+                if (client_router_id != -1) break;
+            }
+            
+            // 作为备用方案，注册新的服务器端连接
+            register_connection(router_id, socket_fd, client_router_id, peer_socket_fd);
+            for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+                if (router_states[router_id].connections[i].is_active &&
+                    router_states[router_id].connections[i].socket_fd == socket_fd) {
+                    router_states[router_id].connections[i].connection_id = connection_id;
+                    break;
+                }
+            }
+            
+            printf("[DESD] R%d (server) registered NEW connection (fallback): fd %d <-> R%d (client) fd %d (conn_id=%lu).\n",
                    router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
-        } else {
-            printf("[DEBUG-CONN-INFO] R%d (server) NO MATCH found for fd=%d, conn_id=%lu\n",
-                   router_id, socket_fd, connection_id);
-            printf("[DESD] R%d (server) registered connection: fd %d <-> R%d (client) [peer fd unknown].\n", 
-                   router_id, socket_fd, client_router_id);
         }
     }
     
@@ -2148,7 +2295,62 @@ void handle_packet_send_event(Event event) {
         send_error_response(source_router_id, request_id, "Invalid connection mapping");
         return;
     }
-    
+
+    // 调试：在发送时对比源和目标两侧的 connection_id / peer_closed，检查是否误用了旧连接映射
+    unsigned long src_conn_id = 0;
+    int src_peer_router = -1;
+    int src_peer_fd = -1;
+    int src_peer_closed = 0;
+    int found_src = 0;
+    if (source_router_id > 0 && source_router_id <= MAX_ROUTERS) {
+        for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+            if (router_states[source_router_id].connections[i].is_active &&
+                router_states[source_router_id].connections[i].socket_fd == socket_fd) {
+                src_conn_id = router_states[source_router_id].connections[i].connection_id;
+                src_peer_router = router_states[source_router_id].connections[i].peer_router_id;
+                src_peer_fd = router_states[source_router_id].connections[i].peer_socket_fd;
+                src_peer_closed = router_states[source_router_id].connections[i].peer_closed;
+                found_src = 1;
+                break;
+            }
+        }
+    }
+
+    unsigned long dst_conn_id = 0;
+    int dst_peer_router = -1;
+    int dst_peer_fd = -1;
+    int dst_peer_closed = 0;
+    int found_dst = 0;
+    if (target_router_id > 0 && target_router_id <= MAX_ROUTERS) {
+        for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+            if (router_states[target_router_id].connections[i].is_active &&
+                router_states[target_router_id].connections[i].socket_fd == target_socket_fd) {
+                dst_conn_id = router_states[target_router_id].connections[i].connection_id;
+                dst_peer_router = router_states[target_router_id].connections[i].peer_router_id;
+                dst_peer_fd = router_states[target_router_id].connections[i].peer_socket_fd;
+                dst_peer_closed = router_states[target_router_id].connections[i].peer_closed;
+                found_dst = 1;
+                break;
+            }
+        }
+    }
+
+    printf("[DESD-SEND-MAP] R%d send(fd:%d) conn_id=%lu peer_router=%d peer_fd=%d peer_closed=%d  ->  R%d recv(fd:%d) conn_id=%lu peer_router=%d peer_fd=%d peer_closed=%d (found_src=%d found_dst=%d)\n",
+           source_router_id, socket_fd, src_conn_id, src_peer_router, src_peer_fd, src_peer_closed,
+           target_router_id, target_socket_fd, dst_conn_id, dst_peer_router, dst_peer_fd, dst_peer_closed,
+           found_src, found_dst);
+
+    if (found_src && found_dst) {
+        if (src_conn_id != 0 && dst_conn_id != 0 && src_conn_id != dst_conn_id) {
+            printf("[DESD-SEND-MAP WARNING] connection_id mismatch when sending: src_conn_id=%lu dst_conn_id=%lu (R%d fd:%d -> R%d fd:%d)\n",
+                   src_conn_id, dst_conn_id, source_router_id, socket_fd, target_router_id, target_socket_fd);
+        }
+        if (dst_peer_closed) {
+            printf("[DESD-SEND-MAP WARNING] target connection appears peer_closed=1 when sending: R%d fd:%d (conn_id=%lu)\n",
+                   target_router_id, target_socket_fd, dst_conn_id);
+        }
+    }
+
     // 将数据存储到目标路由器的缓冲区
     int buffer_index = -1;
     for (int i = 0; i < MAX_PENDING_PACKETS; i++) {
@@ -2283,12 +2485,40 @@ void handle_packet_receive_event(Event event) {
                 
                 // 检查这个socket_fd是否在select()监听的fd集合中，且监听了POLLIN事件
                 int should_wakeup = 0;
+                int wakeup_listen_fd = -1;  // 如果通过监听fd唤醒，记录该fd
+                
                 if (packet_socket_fd >= 0) {
+                    // 情况A：数据到达已accept的正常fd
                     for (int i = 0; i < router_states[target_router_id].monitored_fds_count; i++) {
                         if (router_states[target_router_id].monitored_fds[i] == packet_socket_fd &&
                             (router_states[target_router_id].monitored_fds_events[i] & 0x001)) { // POLLIN
                             should_wakeup = 1;
                             break;
+                        }
+                    }
+                } else {
+                    // 情况B：数据到达虚拟fd（server端还没accept的连接）
+                    // 按照真实内核语义，此时应该把监听fd标为ready（因为有pending connection）
+                    // 这样router被唤醒后会先accept，拿到真实fd，然后再recv数据
+                    if (router_states[target_router_id].pending_connections_count > 0) {
+                        // 检查monitored_fds中是否有监听fd且监听了POLLIN
+                        for (int i = 0; i < router_states[target_router_id].monitored_fds_count; i++) {
+                            int mon_fd = router_states[target_router_id].monitored_fds[i];
+                            int mon_events = router_states[target_router_id].monitored_fds_events[i];
+                            
+                            // 检查这个fd是否是监听socket
+                            for (int j = 0; j < router_states[target_router_id].listen_count; j++) {
+                                if (router_states[target_router_id].listening_socket_fds[j] == mon_fd &&
+                                    (mon_events & 0x001)) { // POLLIN
+                                    should_wakeup = 1;
+                                    wakeup_listen_fd = mon_fd;
+                                    printf("[DESD] R%d: data arrived on virtual fd %d, mapping to listening fd %d (pending_connections=%d)\n",
+                                           target_router_id, packet_socket_fd, mon_fd, 
+                                           router_states[target_router_id].pending_connections_count);
+                                    break;
+                                }
+                            }
+                            if (should_wakeup) break;
                         }
                     }
                 }
@@ -2299,8 +2529,9 @@ void handle_packet_receive_event(Event event) {
                     int tail = router_states[target_router_id].pending_buffer_tail;
                     router_states[target_router_id].pending_buffer_indices[tail] = buffer_index;
                     router_states[target_router_id].pending_buffer_tail = (tail + 1) % MAX_PENDING_PACKETS;
-                    printf("[DESD] R%d has %d pending packet(s) (data arrived on fd:%d but not monitored by select, currently blocked on SELECT_CALL).\n", 
-                           target_router_id, router_states[target_router_id].pending_packets_count, packet_socket_fd);
+                    printf("[DESD] R%d has %d pending packet(s) (data arrived on fd:%d but not monitored by select, pending_connections=%d, currently blocked on SELECT_CALL).\n", 
+                           target_router_id, router_states[target_router_id].pending_packets_count, packet_socket_fd,
+                           router_states[target_router_id].pending_connections_count);
                     return; // 不唤醒，直接返回
                 }
                 
@@ -2324,8 +2555,18 @@ void handle_packet_receive_event(Event event) {
                 router_states[target_router_id].pending_buffer_indices[tail] = buffer_index;
                 router_states[target_router_id].pending_buffer_tail = (tail + 1) % MAX_PENDING_PACKETS;
                 
-                // 构建就绪 FD 列表（包含当前到达的数据包的 socket_fd 以及其他 pending 的）
+                // 构建就绪 FD 列表
                 json_t *ready_fds_array = json_array();
+                
+                // 如果是通过监听fd唤醒的（数据到达虚拟fd的情况），把监听fd加入ready列表
+                if (wakeup_listen_fd >= 0) {
+                    json_t *listen_fd_info = json_object();
+                    json_object_set_new(listen_fd_info, "fd", json_integer(wakeup_listen_fd));
+                    json_object_set_new(listen_fd_info, "revents", json_integer(0x001));  // POLLIN - 新连接待accept
+                    json_array_append_new(ready_fds_array, listen_fd_info);
+                }
+                
+                // 同时检查pending packets中是否有其他已accept的fd也有数据
                 int head = router_states[target_router_id].pending_buffer_head;
                 int count = router_states[target_router_id].pending_packets_count;
                 
@@ -2335,7 +2576,7 @@ void handle_packet_receive_event(Event event) {
                     if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS) {
                         int sock_fd = router_states[target_router_id].packet_buffers[buf_idx].socket_fd;
                         if (sock_fd >= 0) {
-                            // 检查是否已添加
+                            // 检查是否已添加（包括监听fd）
                             int already_added = 0;
                             size_t array_size = json_array_size(ready_fds_array);
                             for (size_t j = 0; j < array_size; j++) {
