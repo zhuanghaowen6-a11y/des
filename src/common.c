@@ -25,6 +25,7 @@ char* event_to_json(const Event* event) {
     json_t *root = json_object();
     json_object_set_new(root, "timestamp", json_real(event->timestamp));
     json_object_set_new(root, "router_id", json_integer(event->router_id));
+    json_object_set_new(root, "thread_id", json_integer(event->thread_id));
     json_object_set_new(root, "event_type", json_string(
         event->event_type == ROUTER_START ? "ROUTER_START" :
         event->event_type == ROUTER_BLOCK_REQUEST ? "ROUTER_BLOCK_REQUEST" :
@@ -80,6 +81,7 @@ void json_to_event(const char* json_str, Event* event) {
     else event->event_type = -1; // Unknown
 
     event->event_id = json_integer_value(json_object_get(root, "event_id"));
+    event->thread_id = json_integer_value(json_object_get(root, "thread_id"));
     
     json_t *payload_obj = json_object_get(root, "payload");
     if (payload_obj) {
@@ -104,6 +106,7 @@ char* message_to_json(const Message* msg) {
         msg->message_type == HOOK_TO_DESD ? "HOOK_TO_DESD" : "DESD_TO_HOOK"
     ));
     json_object_set_new(root, "router_id", json_integer(msg->router_id));
+    json_object_set_new(root, "thread_id", json_integer(msg->thread_id));
     json_object_set_new(root, "request_id", json_string(msg->request_id));
     json_object_set_new(root, "virtual_time", json_real(msg->virtual_time));
     
@@ -128,6 +131,7 @@ char* message_to_json(const Message* msg) {
             msg->event_type == LISTEN_EVENT ? "LISTEN_EVENT" :
             msg->event_type == CONNECTION_INFO_EVENT ? "CONNECTION_INFO_EVENT" :
             msg->event_type == CLOSE_SOCKET_EVENT ? "CLOSE_SOCKET_EVENT" :
+            msg->event_type == CANCEL_BLOCK_REQUEST ? "CANCEL_BLOCK_REQUEST" :
             msg->event_type == GET_VIRTUAL_TIME_EVENT ? "GET_VIRTUAL_TIME_EVENT" : "UNKNOWN"
         ));
     }
@@ -152,6 +156,7 @@ void json_to_message(const char* json_str, Message* msg) {
     else msg->message_type = -1; // Unknown
 
     msg->router_id = json_integer_value(json_object_get(root, "router_id"));
+    msg->thread_id = json_integer_value(json_object_get(root, "thread_id"));
     
     json_t *request_id_json = json_object_get(root, "request_id");
     const char *request_id_str = request_id_json ? json_string_value(request_id_json) : NULL;
@@ -177,6 +182,7 @@ void json_to_message(const char* json_str, Message* msg) {
         else if (event_type_str && strcmp(event_type_str, "LISTEN_EVENT") == 0) msg->event_type = LISTEN_EVENT;
         else if (event_type_str && strcmp(event_type_str, "CONNECTION_INFO_EVENT") == 0) msg->event_type = CONNECTION_INFO_EVENT;
         else if (event_type_str && strcmp(event_type_str, "CLOSE_SOCKET_EVENT") == 0) msg->event_type = CLOSE_SOCKET_EVENT;
+        else if (event_type_str && strcmp(event_type_str, "CANCEL_BLOCK_REQUEST") == 0) msg->event_type = CANCEL_BLOCK_REQUEST;
         else if (event_type_str && strcmp(event_type_str, "GET_VIRTUAL_TIME_EVENT") == 0) msg->event_type = GET_VIRTUAL_TIME_EVENT;
         else msg->event_type = -1; // Unknown
     }

@@ -4,10 +4,14 @@
 
 set -e
 
-KEEP_ENV=${KEEP_ENV:-0}
+KEEP_ENV=${KEEP_ENV:-1}        # 默认 1：运行结束不清理，便于调试
+ENABLE_STRACE=${ENABLE_STRACE:-1}  # 默认 1：对每个 BIRD 开启 strace 跟踪
 
 PROJECT_ROOT="/home/hwzhuang/hwzhuang/desTest/des_design"
 cd "$PROJECT_ROOT"
+
+# 脚本所在目录（用于定位 analyze_bgp_logs.py 等辅助脚本）
+SCRIPT_DIR="${PROJECT_ROOT}/scripts"
 
 # 默认参数
 NUM_ROUTERS=${1:-5}
@@ -22,6 +26,8 @@ echo "=========================================="
 echo "N-Router BGP Test with Docker"
 echo "Routers: $NUM_ROUTERS"
 echo "Test Duration: ${TEST_DURATION}s"
+echo "KEEP_ENV: $KEEP_ENV (1=保留环境, 0=自动清理)"
+echo "ENABLE_STRACE: $ENABLE_STRACE (1=开启strace, 0=关闭)"
 echo "=========================================="
 
 # 日志函数
@@ -38,6 +44,25 @@ log_step() {
     echo "=========================================="
     echo " $1"
     echo "=========================================="
+}
+
+# 启用 core dump（在宿主机上设置，容器通过 -v /tmp:/tmp 共享）
+enable_core_dumps() {
+    log_step "开启 core dump 支持"
+
+    # 在宿主机上设置 core_pattern，让所有进程（包括容器里的 BIRD）把 core 写到宿主机 /tmp
+    if command -v sysctl >/dev/null 2>&1; then
+        if ! sudo sysctl -w kernel.core_pattern=/tmp/core.%e.%p >/dev/null 2>&1; then
+            log_info "无法设置 kernel.core_pattern（可能需要手动: sudo sysctl -w kernel.core_pattern=/tmp/core.%e.%p）"
+        else
+            log_info "kernel.core_pattern 已设置为 /tmp/core.%e.%p（core 会生成在宿主机 /tmp 下）"
+        fi
+    else
+        log_info "sysctl 不存在，跳过 kernel.core_pattern 配置"
+    fi
+
+    # 放宽 suid 可生成 core
+    sudo sysctl -w fs.suid_dumpable=2 >/dev/null 2>&1 || true
 }
 
 # 清理函数
@@ -77,6 +102,8 @@ if [ "$KEEP_ENV" -eq 0 ]; then
 else
     log_info "KEEP_ENV=1: 运行结束不自动清理环境"
 fi
+
+enable_core_dumps
 
 log_step "步骤1: 编译DES项目"
 make clean && make
@@ -152,6 +179,8 @@ log_info "✓ Docker网络: bird_test_net (10.0.0.0/16)"
 log_step "步骤4: 创建并启动容器"
 for i in $(seq 1 $NUM_ROUTERS); do
     ROUTER_IP="10.0.$i.$i"
+
+    sudo docker rm -f r$i 2>/dev/null || true
     
     sudo docker run -d \
         --name r$i \
@@ -160,6 +189,8 @@ for i in $(seq 1 $NUM_ROUTERS); do
         --ip $ROUTER_IP \
         --cap-add=NET_ADMIN \
         --cap-add=NET_RAW \
+        --cap-add=SYS_PTRACE \
+        --security-opt seccomp=unconfined \
         --privileged \
         -v /tmp:/tmp \
         -v /tmp/bird_r${i}.conf:/etc/bird/bird.conf:ro \
@@ -194,16 +225,14 @@ for i in $(seq 1 $NUM_ROUTERS); do
 done
 log_info "✓ libdeshook.so已部署到所有容器"
 
-log_step "步骤6.5: 初始化 core dump 环境（禁用 apport）"
+log_step "步骤6.5: 初始化 core dump 环境"
 
 for i in $(seq 1 $NUM_ROUTERS); do
-    sudo docker exec r$i bash -c "
-        echo core > /proc/sys/kernel/core_pattern
-        ulimit -c unlimited
-    "
+    # 只设置 ulimit，core_pattern 已在宿主机统一配置
+    sudo docker exec r$i bash -c "ulimit -c unlimited" 2>/dev/null || true
 done
 
-log_info "✓ 所有容器已启用裸 core dump"
+log_info "✓ 所有容器已启用 core dump（core 文件写入宿主机 /tmp）"
 
 
 
@@ -237,15 +266,31 @@ log_info "✓ desd运行中，socket权限已设置"
 log_step "步骤8: 并行启动所有BIRD进程（使用FIFO队列匹配）"
 log_info "并行启动 $NUM_ROUTERS 个BIRD进程..."
 
-# 并行启动所有BIRD进程，使用FIFO队列确保CONNECTION_INFO匹配正确
-for i in $(seq 1 $NUM_ROUTERS); do
-    sudo docker exec -d r$i bash -c "
-        ulimit -c unlimited
-        export LD_PRELOAD=/usr/local/lib/libdeshook.so
-        export ROUTER_ID=$i
-        bird -f -c /etc/bird/bird.conf > /var/log/bird_r${i}.log 2>&1
-    " &
-done
+# 并行启动所有BIRD进程
+# 关键点：
+# - 不在 shell 中 export LD_PRELOAD，避免 strace 进程本身也被当成一个"router"去连接 DESD
+# - 仅通过 env 为被跟踪的 bird 进程注入 LD_PRELOAD 和 ROUTER_ID
+if [ "$ENABLE_STRACE" -eq 1 ]; then
+    log_info "strace 已启用，跟踪关键系统调用到 /tmp/bird_r*_strace.log"
+    for i in $(seq 1 $NUM_ROUTERS); do
+        sudo docker exec -d r$i bash -c '
+            ulimit -c unlimited
+            strace -f -o /tmp/bird_r'"$i"'_strace.log \
+                -e trace=close,exit,exit_group,signal,poll,select,recvfrom,read,write,socket,connect,accept,bind,listen \
+                env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID='"$i"' \
+                bird -f -c /etc/bird/bird.conf > /var/log/bird_r'"$i"'.log 2>&1
+        ' &
+    done
+else
+    log_info "strace 已禁用，直接启动 BIRD"
+    for i in $(seq 1 $NUM_ROUTERS); do
+        sudo docker exec -d r$i bash -c '
+            ulimit -c unlimited
+            env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID='"$i"' \
+                bird -f -c /etc/bird/bird.conf > /var/log/bird_r'"$i"'.log 2>&1
+        ' &
+    done
+fi
 
 # 等待所有启动命令完成
 wait
@@ -298,40 +343,44 @@ for i in $(seq 1 $CHECKS); do
     echo "[$((i*10))s/${TEST_DURATION}s] DESD: running, BIRD: $RUNNING_COUNT/$NUM_ROUTERS, VT: ${VT}s"
 done
 
-log_step "步骤11: 检查BGP会话状态"
+log_step "步骤11: 收集最终日志"
 echo ""
-TOTAL_SESSIONS=$((NUM_ROUTERS * (NUM_ROUTERS - 1)))
-ESTABLISHED=0
 
+# 将容器内的 BIRD 日志复制到 logs 目录，供分析脚本使用
 for i in $(seq 1 $NUM_ROUTERS); do
-    echo "R$i BGP状态："
-    BGP_OUTPUT=$(sudo docker exec r$i birdc show protocols 2>/dev/null || echo "ERROR")
-    echo "$BGP_OUTPUT"
-    
-    # 统计Established会话
-    EST_COUNT=$(echo "$BGP_OUTPUT" | grep -c "Established" || echo "0")
-    ESTABLISHED=$((ESTABLISHED + EST_COUNT))
-    echo ""
+    sudo docker cp r$i:/var/log/bird_r${i}.log logs/bird_r${i}.log 2>/dev/null || true
+    # 如果启用了 strace，也复制 strace 日志
+    if [ "$ENABLE_STRACE" -eq 1 ]; then
+        sudo docker cp r$i:/tmp/bird_r${i}_strace.log logs/bird_r${i}_strace.log 2>/dev/null || true
+    fi
 done
+log_info "日志已收集到 logs/ 目录"
 
-log_step "测试结果"
-echo "预期BGP会话数: $TOTAL_SESSIONS (${NUM_ROUTERS}路由器 full mesh)"
-echo "已建立会话数: $ESTABLISHED"
+log_step "步骤12: 分析测试结果"
 echo ""
 
-VT_FINAL=$(grep "responding with VT" logs/desd_n${NUM_ROUTERS}.log 2>/dev/null | tail -1 | grep -oP 'VT=\K[0-9.]+' || echo "N/A")
-EVENT_COUNT=$(wc -l < logs/desd_n${NUM_ROUTERS}.log 2>/dev/null || echo "0")
+# 使用 Python 脚本进行全面的日志分析
+# 该脚本会检查：
+#   1. DESD 是否正常退出（达到事件上限）
+#   2. 所有 BGP 会话是否成功建立
+#   3. 在 DESD 退出前，是否有任何 BGP 会话被协议层主动断开
+ANALYZE_SCRIPT="${SCRIPT_DIR}/analyze_bgp_logs.py"
 
-echo "最终虚拟时间: ${VT_FINAL}s"
-echo "DESD事件总数: $EVENT_COUNT"
-echo ""
-
-if [ "$ESTABLISHED" -eq "$TOTAL_SESSIONS" ]; then
-    echo "🎉 测试成功！所有BGP会话已建立！"
+if [ -f "$ANALYZE_SCRIPT" ]; then
+    python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "logs"
+    ANALYZE_RESULT=$?
 else
-    echo "⚠️  部分会话未建立，详细信息见日志"
-    echo "查看desd日志: tail -f logs/desd_n${NUM_ROUTERS}.log"
-    echo "查看R1日志: sudo docker exec r1 cat /var/log/bird_r1.log"
+    log_error "分析脚本不存在: $ANALYZE_SCRIPT"
+    ANALYZE_RESULT=1
+fi
+
+echo ""
+if [ $ANALYZE_RESULT -eq 0 ]; then
+    echo "🎉 测试成功！BGP 会话在整个仿真期间保持健康。"
+else
+    echo "⚠️  测试发现问题，详细信息见上方分析报告"
+    echo "查看desd日志: less logs/desd_n${NUM_ROUTERS}.log"
+    echo "查看R1日志: less logs/bird_r1.log"
 fi
 
 echo ""

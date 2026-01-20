@@ -27,6 +27,26 @@ log_step() {
     echo "=========================================="
 }
 
+# 启用 core dump（在宿主机和容器中为后续调试准备）
+enable_core_dumps() {
+    log_step "开启 core dump 支持"
+
+    # 1. 在宿主机上设置 core_pattern，让所有进程（包括容器里的 BIRD）把 core 写到宿主机 /tmp
+    if command -v sysctl >/dev/null 2>&1; then
+        # 写入 /tmp/core.<exe>.<pid>，这样 /tmp 通过 -v /tmp:/tmp 也能在容器中看到
+        if ! sudo sysctl -w kernel.core_pattern=/tmp/core.%e.%p >/dev/null 2>&1; then
+            log_warn "无法设置 kernel.core_pattern（可能需要手动: sudo sysctl -w kernel.core_pattern=/tmp/core.%e.%p）"
+        else
+            log_info "kernel.core_pattern 已设置为 /tmp/core.%e.%p（core 会生成在宿主机 /tmp 下）"
+        fi
+    else
+        log_warn "sysctl 不存在，跳过 kernel.core_pattern 配置"
+    fi
+
+    # 2. 放宽 suid 可生成 core（不是必须，但更稳妥）
+    sudo sysctl -w fs.suid_dumpable=2 >/dev/null 2>&1 || true
+}
+
 # 检查Docker是否安装
 check_docker() {
     if ! command -v docker &> /dev/null; then
@@ -90,12 +110,12 @@ check_bird_image() {
 
 # 清理函数
 cleanup() {
+
     log_step "清理环境"
     
-    # 停止容器
-    sudo docker stop r1 r2 2>/dev/null || true
-    sudo docker rm r1 r2 2>/dev/null || true
-    log_info "容器已清理"
+    # 停止容器（不删除，便于后续调试和拷贝日志）
+    #sudo docker stop r1 r2 2>/dev/null || true
+    log_info "容器未停止（未删除,测试）"
     
     # 停止desd
     if [ -f /tmp/desd.pid ]; then
@@ -113,9 +133,10 @@ cleanup() {
     sudo docker network rm bird_test_net 2>/dev/null || true
     log_info "Docker网络已清理"
     
-    # 清理配置文件
-    rm -f /tmp/bird_r1.conf /tmp/bird_r2.conf /tmp/test_uds_mount
-    log_info "临时文件已清理"
+    # 清理配置文件（保留 bird_r*.conf 方便后续从容器中拷贝日志和调试）
+    #rm -f /tmp/bird_r1.conf /tmp/bird_r2.conf /tmp/test_uds_mount
+    rm -f /tmp/test_uds_mount
+    log_info "临时文件已部分清理（保留 /tmp/bird_r*.conf 以避免Docker挂载失效）"
 }
 
 # 捕获退出信号
@@ -128,6 +149,7 @@ trap cleanup EXIT
 log_step "步骤0: 环境检查"
 check_docker
 check_bird_image
+enable_core_dumps
 
 log_step "步骤1: 编译DES项目"
 make clean && make
@@ -135,6 +157,9 @@ log_info "✓ 编译完成"
 ls -lh build/desd build/libdeshook.so
 
 log_step "步骤2: 准备BIRD配置文件"
+
+# 确保旧的配置路径不存在（可能被Docker误创建为目录，导致 "Is a directory"）
+rm -rf /tmp/bird_r1.conf /tmp/bird_r2.conf 2>/dev/null || true
 
 # R1配置
 cat > /tmp/bird_r1.conf << 'EOF'
@@ -238,6 +263,8 @@ sudo docker run -d \
     --ip 10.0.1.1 \
     --cap-add=NET_ADMIN \
     --cap-add=NET_RAW \
+    --cap-add=SYS_PTRACE \
+    --security-opt seccomp=unconfined \
     --privileged \
     -v /tmp:/tmp \
     -v /tmp/bird_r1.conf:/etc/bird/bird.conf:ro \
@@ -255,6 +282,8 @@ sudo docker run -d \
     --ip 10.0.2.2 \
     --cap-add=NET_ADMIN \
     --cap-add=NET_RAW \
+    --cap-add=SYS_PTRACE \
+    --security-opt seccomp=unconfined \
     --privileged \
     -v /tmp:/tmp \
     -v /tmp/bird_r2.conf:/etc/bird/bird.conf:ro \
@@ -309,20 +338,29 @@ fi
 sudo chmod 666 /tmp/desd_control_socket
 log_info "✓ desd运行中，socket权限已设置"
 
-log_step "步骤9: 同时启动R1和R2的BIRD"
-log_info "同时启动两个BIRD进程以确保desd能同时接收连接..."
+log_step "步骤9: 同时启动R1和R2的BIRD（使用strace跟踪系统调用）"
+log_info "同时启动两个BIRD进程以确保desd能同时接收连接，并使用strace抓取系统调用（仅对bird本身生效）..."
 
-# 几乎同时启动两个BIRD进程
+# 几乎同时启动两个BIRD进程，并使用strace记录关键系统调用到共享的/tmp目录
+# 关键点：
+# - 不在shell中export LD_PRELOAD，避免strace进程本身也被当成一个"router"去连接DESD
+# - 仅通过 env 为被跟踪的 bird 进程注入 LD_PRELOAD 和 ROUTER_ID
 sudo docker exec -d r1 bash -c '
-    export LD_PRELOAD=/usr/local/lib/libdeshook.so
-    export ROUTER_ID=1
-    bird -f -c /etc/bird/bird.conf > /var/log/bird_r1.log 2>&1
+    # 为 bird 进程打开 core dump
+    ulimit -c unlimited
+    strace -f -o /tmp/bird_r1_strace.log \
+        -e trace=close,exit,exit_group,signal,poll,select,recvfrom,read,write,socket,connect,accept,bind,listen \
+        env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID=1 \
+        bird -f -c /etc/bird/bird.conf > /var/log/bird_r1.log 2>&1
 ' &
 
 sudo docker exec -d r2 bash -c '
-    export LD_PRELOAD=/usr/local/lib/libdeshook.so
-    export ROUTER_ID=2
-    bird -f -c /etc/bird/bird.conf > /var/log/bird_r2.log 2>&1
+    # 为 bird 进程打开 core dump
+    ulimit -c unlimited
+    strace -f -o /tmp/bird_r2_strace.log \
+        -e trace=close,exit,exit_group,signal,poll,select,recvfrom,read,write,socket,connect,accept,bind,listen \
+        env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID=2 \
+        bird -f -c /etc/bird/bird.conf > /var/log/bird_r2.log 2>&1
 ' &
 
 # 等待两个启动命令完成
