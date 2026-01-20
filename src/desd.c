@@ -1330,42 +1330,16 @@ void drain_all_messages_nonblocking() {
                     printf("[DESD-DRAIN] R%d T%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), queued at VT=%.3f.\n",
                            router_id, thread_id, msg.request_id, current_virtual_time);
                     
-                } else if (msg.event_type == PACKET_SEND_EVENT) {
-                    // B1 方案：PACKET_SEND 入队后立即回 ACK，不阻塞线程
-                    // 事件仍然按 VT + 0.002 的时间戳入队，由主循环执行真正的发包逻辑
-                    double event_timestamp = current_virtual_time + 0.002;
-                    
-                    Event new_event = {
-                        .timestamp = event_timestamp,
-                        .router_id = router_id,
-                        .thread_id = thread_id,
-                        .event_type = msg.event_type,
-                        .event_id = generate_event_id(),
-                        .payload = msg.payload
-                    };
-                    
-                    push_event(new_event);
-                    
-                    // 立即发送成功响应，让 send() 尽快返回，释放 BIRD 内部锁
-                    // 线程保持 RUNNING 状态，不标记为 BLOCKED
-                    pthread_mutex_lock(&router_states_mutex);
-                    ti = get_thread_info(router_id, thread_id);
-                    if (ti) {
-                        ti->status = RUNNING;
-                    }
-                    pthread_mutex_unlock(&router_states_mutex);
-                    
-                    send_success_response(router_id, thread_id, msg.request_id, "SEND", "Packet Enqueued", NULL);
-                    
-                    printf("[DESD-DRAIN] R%d T%d sent PACKET_SEND_EVENT (ReqID: %s), queued at VT=%.3f, ACK sent immediately (EventID: %lu).\n",
-                           router_id, thread_id, msg.request_id, event_timestamp, new_event.event_id);
-                    
                 } else if (msg.event_type == ROUTER_BLOCK_REQUEST ||
+                           msg.event_type == PACKET_SEND_EVENT ||
                            msg.event_type == CONNECT_REQUEST_EVENT ||
                            thread_status == RUNNING_DETACHED) {
                     // 阻塞类请求（包括来自 RUNNING_DETACHED 线程的"重新 hook"请求）
                     // 构造 Event 入队，标记线程为 BLOCKED
                     double event_timestamp = current_virtual_time;
+                    if (msg.event_type == PACKET_SEND_EVENT) {
+                        event_timestamp = current_virtual_time + 0.002;
+                    }
                     
                     Event new_event = {
                         .timestamp = event_timestamp,
@@ -1587,30 +1561,11 @@ void interact_with_router_until_it_blocks(int active_router_id) {
                     return;  // 立即返回主循环处理
                 }
                 
-                // B1 方案：PACKET_SEND 入队后立即回 ACK，不阻塞线程，继续读取后续消息
-                if (msg.event_type == PACKET_SEND_EVENT) {
-                    double event_timestamp = current_virtual_time + 0.002;
-                    
-                    Event send_event = {
-                        .timestamp = event_timestamp,
-                        .router_id = router_id,
-                        .thread_id = thread_id,
-                        .event_type = PACKET_SEND_EVENT,
-                        .event_id = generate_event_id(),
-                        .payload = msg.payload
-                    };
-                    push_event(send_event);
-                    
-                    // 立即发送成功响应，让 send() 尽快返回
-                    send_success_response(router_id, thread_id, msg.request_id, "SEND", "Packet Enqueued", NULL);
-                    
-                    printf("[DESD-INTERACT] R%d T%d sent PACKET_SEND_EVENT (ReqID: %s), queued at VT=%.3f, ACK sent immediately (EventID: %lu). Continuing.\n",
-                           router_id, thread_id, msg.request_id, event_timestamp, send_event.event_id);
-                    continue;  // 继续读取此 fd 的下一条消息，因为 router 收到 ACK 后可能还会继续发
-                }
-                
-                // 阻塞类请求（ROUTER_BLOCK_REQUEST, CONNECT_REQUEST 等）
+                // 阻塞类请求（ROUTER_BLOCK_REQUEST, PACKET_SEND, CONNECT_REQUEST 等）
                 double event_timestamp = current_virtual_time;
+                if (msg.event_type == PACKET_SEND_EVENT) {
+                    event_timestamp = current_virtual_time + 0.002;
+                }
                 
                 Event next_event = {
                     .timestamp = event_timestamp,
@@ -1785,56 +1740,38 @@ void wait_for_detached_threads_to_rehook() {
                 pthread_mutex_unlock(&router_states_mutex);
                 
                 // 将消息统一处理为事件入队（包括 GET_VIRTUAL_TIME_EVENT）
-                // B1 方案：PACKET_SEND_EVENT 入队后立即回 ACK，不标记为 BLOCKED
+                double event_timestamp = current_virtual_time;
                 if (msg.event_type == PACKET_SEND_EVENT) {
-                    double send_timestamp = current_virtual_time + 0.002;
-                    
-                    Event send_event = {
-                        .timestamp = send_timestamp,
-                        .router_id = router_id,
-                        .thread_id = thread_id,
-                        .event_type = PACKET_SEND_EVENT,
-                        .event_id = generate_event_id(),
-                        .payload = msg.payload
-                    };
-                    
-                    push_event(send_event);
-                    
-                    // 立即发送成功响应，让 send() 尽快返回
-                    send_success_response(router_id, thread_id, msg.request_id, "SEND", "Packet Enqueued", NULL);
-                    
-                    printf("[DESD-DETACH-WAIT] R%d T%d sent PACKET_SEND_EVENT (ReqID: %s), queued at VT=%.3f, ACK sent immediately (EventID: %lu).\n",
-                           router_id, thread_id, msg.request_id, send_timestamp, send_event.event_id);
-                } else {
-                    double event_timestamp = current_virtual_time;
-                    
-                    Event new_event = {
-                        .timestamp = event_timestamp,
-                        .router_id = router_id,
-                        .thread_id = thread_id,
-                        .event_type = msg.event_type,
-                        .event_id = generate_event_id(),
-                        .payload = msg.payload
-                    };
-                    
-                    // 如果是阻塞类请求（不含 PACKET_SEND），标记线程为 BLOCKED
-                    if (msg.event_type == ROUTER_BLOCK_REQUEST ||
-                        msg.event_type == CONNECT_REQUEST_EVENT) {
-                        pthread_mutex_lock(&router_states_mutex);
-                        ti = get_thread_info(router_id, thread_id);
-                        if (ti) {
-                            strncpy(ti->blocked_on_request_id, msg.request_id, 63);
-                            ti->blocked_on_request_id[63] = '\0';
-                            ti->status = BLOCKED;
-                        }
-                        pthread_mutex_unlock(&router_states_mutex);
-                    }
-                    
-                    push_event(new_event);
-                    printf("[DESD-DETACH-WAIT] R%d T%d sent %s (ReqID: %s), queued at VT=%.3f.\n",
-                           router_id, thread_id, event_type_to_string(msg.event_type),
-                           msg.request_id, event_timestamp);
+                    event_timestamp = current_virtual_time + 0.002;
                 }
+                
+                Event new_event = {
+                    .timestamp = event_timestamp,
+                    .router_id = router_id,
+                    .thread_id = thread_id,
+                    .event_type = msg.event_type,
+                    .event_id = generate_event_id(),
+                    .payload = msg.payload
+                };
+                
+                // 如果是阻塞类请求，标记线程为 BLOCKED
+                if (msg.event_type == ROUTER_BLOCK_REQUEST ||
+                    msg.event_type == PACKET_SEND_EVENT ||
+                    msg.event_type == CONNECT_REQUEST_EVENT) {
+                    pthread_mutex_lock(&router_states_mutex);
+                    ti = get_thread_info(router_id, thread_id);
+                    if (ti) {
+                        strncpy(ti->blocked_on_request_id, msg.request_id, 63);
+                        ti->blocked_on_request_id[63] = '\0';
+                        ti->status = BLOCKED;
+                    }
+                    pthread_mutex_unlock(&router_states_mutex);
+                }
+                
+                push_event(new_event);
+                printf("[DESD-DETACH-WAIT] R%d T%d sent %s (ReqID: %s), queued at VT=%.3f.\n",
+                       router_id, thread_id, event_type_to_string(msg.event_type),
+                       msg.request_id, event_timestamp);
             }  // end while(1) for this fd
         }
     }
@@ -1945,10 +1882,8 @@ void desd_event_loop() {
         RouterStatus status_after_event = thread_info ? thread_info->status : IDLE;
         
         // 路由器主动发起的事件类型（不含 ROUTER_START，后者单独用 IDLE->RUNNING 判断）
-        // 注意：在 B1 方案下，PACKET_SEND_EVENT 的 RPC ACK 已在入队时发送，
-        // 事件执行阶段不再代表一个“受 DES 控制的 router 计算片段”，
-        // 因此不再将其视为触发 interact 的 router_initiated_event。
         int is_router_initiated_event = (
+            current_event.event_type == PACKET_SEND_EVENT ||
             current_event.event_type == CONNECT_REQUEST_EVENT ||
             current_event.event_type == ROUTER_BLOCK_REQUEST ||
             current_event.event_type == GET_VIRTUAL_TIME_EVENT
@@ -3533,6 +3468,15 @@ void handle_packet_send_event(Event event) {
     
     json_decref(payload_obj);
 
+    // send()操作本身是瞬时的，发送方不会阻塞
+    int thread_id = event.thread_id;
+    ThreadInfo *ti = get_thread_info(source_router_id, thread_id);
+    if (source_router_id > 0 && source_router_id <= MAX_ROUTERS && ti) {
+        ti->status = RUNNING;
+        memset(ti->blocked_on_request_id, 0, 64);
+        memset(ti->blocked_on_function, 0, 64);
+    }
+
     double transmission_delay = 0.1; // 0.1s (100ms) - 数据包传输延迟
     double receive_time = current_virtual_time + transmission_delay;
 
@@ -3540,9 +3484,9 @@ void handle_packet_send_event(Event event) {
     int target_router_id = find_peer_router(source_router_id, socket_fd);
     
     if (target_router_id == -1) {
-        // B1 方案：ACK 已在入队时发送，这里只打日志，不再发送 RPC 响应
-        fprintf(stderr, "[DESD ERROR] R%d: No peer found for socket fd %d. Cannot send packet (ACK already sent at enqueue time).\n", 
+        fprintf(stderr, "[DESD ERROR] R%d: No peer found for socket fd %d. Cannot send packet.\n", 
                 source_router_id, socket_fd);
+        send_error_response(source_router_id, event.thread_id, request_id, "Invalid connection");
         return;
     }
     
@@ -3557,18 +3501,18 @@ void handle_packet_send_event(Event event) {
     }
     
     if (peer_has_closed) {
-        // B1 方案：ACK 已在入队时发送，这里只打日志
-        fprintf(stderr, "[DESD ERROR] R%d: Cannot send on fd %d - peer has closed connection (ACK already sent at enqueue time).\n",
+        fprintf(stderr, "[DESD ERROR] R%d: Cannot send on fd %d - peer has closed connection.\n",
                 source_router_id, socket_fd);
+        send_error_response(source_router_id, event.thread_id, request_id, "Peer connection closed");
         return;
     }
 
     // 查找目标路由器对应这个连接的 socket_fd（使用源路由器的 socket_fd 进行精确匹配）
     int target_socket_fd = find_socket_fd_for_peer(target_router_id, source_router_id, socket_fd);
     if (target_socket_fd == -1) {
-        // B1 方案：ACK 已在入队时发送，这里只打日志
-        fprintf(stderr, "[DESD ERROR] R%d: Cannot find socket_fd for connection from R%d (source fd=%d) (ACK already sent at enqueue time).\n",
+        fprintf(stderr, "[DESD ERROR] R%d: Cannot find socket_fd for connection from R%d (source fd=%d).\n",
                 target_router_id, source_router_id, socket_fd);
+        send_error_response(source_router_id, event.thread_id, request_id, "Invalid connection mapping");
         return;
     }
 
@@ -3637,9 +3581,9 @@ void handle_packet_send_event(Event event) {
     }
     
     if (buffer_index == -1) {
-        // B1 方案：ACK 已在入队时发送，这里只打日志
-        fprintf(stderr, "[DESD ERROR] R%d: No free packet buffer for R%d. Dropping packet (ACK already sent at enqueue time).\n",
+        fprintf(stderr, "[DESD ERROR] R%d: No free packet buffer for R%d. Dropping packet.\n",
                 source_router_id, target_router_id);
+        send_error_response(source_router_id, event.thread_id, request_id, "Packet buffer full");
         return;
     }
     
@@ -3674,8 +3618,7 @@ void handle_packet_send_event(Event event) {
     printf("[DESD] R%d (fd:%d) sent packet to R%d. Scheduled PACKET_RECEIVE_EVENT at VT=%.3f (EventID: %lu).\n",
            source_router_id, socket_fd, target_router_id, receive_time, receive_event.event_id);
     
-    // B1 方案：成功响应已在入队时发送，这里不再重复发送
-    // send_success_response(source_router_id, event.thread_id, request_id, "SEND", "Packet Sent", NULL);
+    send_success_response(source_router_id, event.thread_id, request_id, "SEND", "Packet Sent", NULL); // 发送方send()成功返回
 }
 
 void handle_packet_receive_event(Event event) {
