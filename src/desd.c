@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <jansson.h> // For JSON parsing
 #include <poll.h> // For poll() function
+#include <stdint.h> // For uintptr_t
 
 // --- Global DESD State ---
 // 尽管是单线程，但事件队列的访问和条件变量的等待仍需要互斥锁。
@@ -130,6 +131,28 @@ static double first_detached_vt = 0.0;         // 第一个线程进入 DETACHED
 
 // 心跳日志计数器（全局，便于在退出时统计）
 static unsigned long heartbeat_event_counter = 0;
+
+// === Mutex Hook 相关全局状态 ===
+// Mutex 等待者队列结构（每个 mutex 最多 MAX_MUTEX_WAITERS 个等待线程）
+#define MAX_TRACKED_MUTEXES 2048
+#define MAX_MUTEX_WAITERS 32
+
+typedef struct {
+    int router_id;
+    int thread_id;
+} MutexWaiter;
+
+typedef struct {
+    uintptr_t mutex_addr;           // mutex 地址（作为唯一标识）
+    int owner_router_id;            // 当前持有者的 router_id（0 表示无持有者）
+    int owner_thread_id;            // 当前持有者的 thread_id
+    MutexWaiter waiters[MAX_MUTEX_WAITERS];  // 等待队列（FIFO）
+    int waiter_count;               // 等待者数量
+    int is_active;                  // 该 slot 是否被使用
+} MutexInfo;
+
+static MutexInfo mutex_table[MAX_TRACKED_MUTEXES];
+static int mutex_table_count = 0;  // 当前跟踪的 mutex 数量
 
 // Forward declarations for functions used in registration_thread_func
 void push_event(Event new_event);
@@ -506,7 +529,7 @@ void handle_event(Event event);
 
 // 新架构：drain 阶段和单路由器交互函数
 void drain_all_messages_nonblocking();
-void interact_with_router_until_it_blocks(int active_router_id);
+void interact_with_router_until_it_blocks(int active_router_id, int active_thread_id);
 
 // Event Handlers
 void handle_router_start(Event event);
@@ -521,6 +544,13 @@ void handle_packet_receive_event(Event event);
 void handle_timeout_event(Event event);
 void handle_get_virtual_time_event(Event event);
 void handle_cancel_block_request(Event event);
+void handle_mutex_retry_event(Event event);
+
+// Mutex Hook 相关函数
+static MutexInfo* find_or_create_mutex(uintptr_t mutex_addr);
+static void handle_mutex_lock_acquired(int router_id, int thread_id, uintptr_t mutex_addr);
+static void handle_mutex_wait_start(int router_id, int thread_id, uintptr_t mutex_addr);
+static void handle_mutex_unlock_msg(int router_id, int thread_id, uintptr_t mutex_addr);
 
 // Helper functions for sending specific responses
 void send_success_response(int router_id, int thread_id, const char* request_id, const char* blocked_func, const char* message, const char* connection_id_str);
@@ -1183,6 +1213,10 @@ const char* event_type_to_string(EventType type) {
         case CLOSE_SOCKET_EVENT: return "CLOSE_SOCKET_EVENT";
         case GET_VIRTUAL_TIME_EVENT: return "GET_VIRTUAL_TIME_EVENT";
         case CANCEL_BLOCK_REQUEST: return "CANCEL_BLOCK_REQUEST";
+        case MUTEX_LOCK_ACQUIRED: return "MUTEX_LOCK_ACQUIRED";
+        case MUTEX_WAIT_START: return "MUTEX_WAIT_START";
+        case MUTEX_UNLOCK: return "MUTEX_UNLOCK";
+        case MUTEX_RETRY_EVENT: return "MUTEX_RETRY_EVENT";
         default: return "UNKNOWN_EVENT";
     }
 }
@@ -1318,6 +1352,7 @@ void drain_all_messages_nonblocking() {
                     
                 } else if (msg.event_type == GET_VIRTUAL_TIME_EVENT) {
                     // GET_VIRTUAL_TIME: 统一入队处理，由主事件循环分发到 handle_get_virtual_time_event
+                    // 重要：GETVT 也是阻塞型 RPC，线程在等 DESD 回复期间是 BLOCKED 状态
                     Event vt_event = {
                         .timestamp = current_virtual_time,
                         .router_id = router_id,
@@ -1327,7 +1362,18 @@ void drain_all_messages_nonblocking() {
                         .payload = msg.payload
                     };
                     push_event(vt_event);
-                    printf("[DESD-DRAIN] R%d T%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), queued at VT=%.3f.\n",
+                    
+                    // 标记线程为 BLOCKED，等待 GETVT 事件被处理并回复
+                    pthread_mutex_lock(&router_states_mutex);
+                    ti = get_thread_info(router_id, thread_id);
+                    if (ti) {
+                        strncpy(ti->blocked_on_request_id, msg.request_id, 63);
+                        ti->blocked_on_request_id[63] = '\0';
+                        ti->status = BLOCKED;
+                    }
+                    pthread_mutex_unlock(&router_states_mutex);
+                    
+                    printf("[DESD-DRAIN] R%d T%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), marked BLOCKED, queued at VT=%.3f.\n",
                            router_id, thread_id, msg.request_id, current_virtual_time);
                     
                 } else if (msg.event_type == ROUTER_BLOCK_REQUEST ||
@@ -1372,7 +1418,7 @@ void drain_all_messages_nonblocking() {
                 } else if (msg.event_type == LISTEN_EVENT ||
                            msg.event_type == CONNECTION_INFO_EVENT ||
                            msg.event_type == CLOSE_SOCKET_EVENT) {
-                    // 瞬时事件：统一入队处理（便于理解和管理，所有事件都通过队列）
+                    // LISTEN/CONNECTION_INFO/CLOSE_SOCKET 也是阻塞型 RPC，需要标记 BLOCKED
                     Event instant_event = {
                         .timestamp = current_virtual_time,
                         .router_id = router_id,
@@ -1382,9 +1428,46 @@ void drain_all_messages_nonblocking() {
                         .payload = msg.payload
                     };
                     push_event(instant_event);
-                    printf("[DESD-DRAIN] R%d T%d sent %s (ReqID: %s), queued at VT=%.3f.\n",
+                    
+                    // 标记线程为 BLOCKED，等待事件被处理并回复
+                    pthread_mutex_lock(&router_states_mutex);
+                    ti = get_thread_info(router_id, thread_id);
+                    if (ti) {
+                        strncpy(ti->blocked_on_request_id, msg.request_id, 63);
+                        ti->blocked_on_request_id[63] = '\0';
+                        ti->status = BLOCKED;
+                    }
+                    pthread_mutex_unlock(&router_states_mutex);
+                    
+                    printf("[DESD-DRAIN] R%d T%d sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f.\n",
                            router_id, thread_id, event_type_to_string(msg.event_type),
                            msg.request_id, current_virtual_time);
+                           
+                } else if (msg.event_type == MUTEX_LOCK_ACQUIRED ||
+                           msg.event_type == MUTEX_WAIT_START ||
+                           msg.event_type == MUTEX_UNLOCK) {
+                    // === Mutex Hook 消息：即时处理，不入队列 ===
+                    // 从 payload 解析 mutex_addr
+                    uintptr_t mutex_addr = 0;
+                    json_error_t json_err;
+                    json_t *mutex_payload = json_loads(msg.payload.json_str, 0, &json_err);
+                    if (mutex_payload) {
+                        json_t *addr_json = json_object_get(mutex_payload, "mutex_addr");
+                        if (addr_json && json_is_integer(addr_json)) {
+                            mutex_addr = (uintptr_t)json_integer_value(addr_json);
+                        }
+                        json_decref(mutex_payload);
+                    }
+                    
+                    if (msg.event_type == MUTEX_LOCK_ACQUIRED) {
+                        handle_mutex_lock_acquired(router_id, thread_id, mutex_addr);
+                    } else if (msg.event_type == MUTEX_WAIT_START) {
+                        handle_mutex_wait_start(router_id, thread_id, mutex_addr);
+                    } else if (msg.event_type == MUTEX_UNLOCK) {
+                        handle_mutex_unlock_msg(router_id, thread_id, mutex_addr);
+                    }
+                    // Mutex 消息不需要回复，继续处理下一条消息
+                    
                 } else {
                     // 未知消息类型
                     fprintf(stderr, "[DESD-DRAIN WARNING] Unknown message from R%d T%d (status=%d): %s\n",
@@ -1396,41 +1479,28 @@ void drain_all_messages_nonblocking() {
     }
 }
 
-// interact_with_router_until_it_blocks: 与单个路由器交互直到它再次阻塞
-// 职责单一化：只监听 active_router 的 RUNNING 线程
-// 其他 router 的消息由主循环开头的 drain_all_messages_nonblocking() 统一处理
-void interact_with_router_until_it_blocks(int active_router_id) {
-    struct pollfd poll_fds[MAX_THREADS_PER_ROUTER];
-    int fd_to_thread[MAX_THREADS_PER_ROUTER];
+// interact_with_router_until_it_blocks: 与单个路由器的单个线程交互直到它再次阻塞
+// 职责单一化：只监听 active_router 的 active_thread_id 线程
+// 其他 router/thread 的消息由主循环开头的 drain_all_messages_nonblocking() 统一处理
+void interact_with_router_until_it_blocks(int active_router_id, int active_thread_id) {
+    struct pollfd poll_fd;
     
     while (1) {
-        int poll_count = 0;
-        
-        // 只收集 active_router 的 RUNNING 线程的 socket
+        // 检查当前线程是否仍然 RUNNING
         pthread_mutex_lock(&router_states_mutex);
-        for (int t = 0; t < MAX_THREADS_PER_ROUTER; t++) {
-            ThreadInfo *ti = &router_states[active_router_id].threads[t];
-            if (!ti->is_active || ti->comm_socket_fd < 0) {
-                continue;
-            }
-            
-            if (ti->status == RUNNING) {
-                poll_fds[poll_count].fd = ti->comm_socket_fd;
-                poll_fds[poll_count].events = POLLIN;
-                poll_fds[poll_count].revents = 0;
-                fd_to_thread[poll_count] = t;
-                poll_count++;
-            }
-        }
-        pthread_mutex_unlock(&router_states_mutex);
-        
-        // 如果 active_router 没有 RUNNING 的线程了，说明它已经完全阻塞，返回
-        if (poll_count == 0) {
+        ThreadInfo *ti = get_thread_info(active_router_id, active_thread_id);
+        if (!ti || !ti->is_active || ti->comm_socket_fd < 0 || ti->status != RUNNING) {
+            // 线程不存在、不活跃、或者已经不是 RUNNING 状态，退出 interact
+            pthread_mutex_unlock(&router_states_mutex);
             return;
         }
+        poll_fd.fd = ti->comm_socket_fd;
+        poll_fd.events = POLLIN;
+        poll_fd.revents = 0;
+        pthread_mutex_unlock(&router_states_mutex);
         
-        // 阻塞等待任意线程有数据
-        int poll_result = poll(poll_fds, poll_count, -1);
+        // 阻塞等待该线程有数据
+        int poll_result = poll(&poll_fd, 1, -1);
         
         if (poll_result < 0) {
             if (errno == EINTR) {
@@ -1440,152 +1510,213 @@ void interact_with_router_until_it_blocks(int active_router_id) {
             return;
         }
         
-        // 处理所有有数据的 fd（只有 active_router 的线程）
-        for (int i = 0; i < poll_count; i++) {
-            if (!(poll_fds[i].revents & POLLIN)) {
-                continue;
-            }
+        // 检查是否有数据
+        if (!(poll_fd.revents & POLLIN)) {
+            continue;
+        }
+        
+        int router_id = active_router_id;
+        int thread_id = active_thread_id;
+        
+        // 使用按行拆包的 helper 读取消息
+        pthread_mutex_lock(&router_states_mutex);
+        ti = get_thread_info(router_id, thread_id);
+        pthread_mutex_unlock(&router_states_mutex);
+        
+        if (!ti) {
+            return;
+        }
+        
+        // 循环读取同一 fd 上所有完整 JSON 消息
+        // 解决 CANCEL + GETVT 粘在一次 recv 时只处理 CANCEL 的问题
+        while (1) {
+            // interact 阶段：用非阻塞读取（MSG_DONTWAIT）
+            // 因为 poll 只告诉我们有数据，但不知道有几条完整 JSON
+            Message msg;
+            int read_result = read_one_json_message(ti, MSG_DONTWAIT, &msg);
             
-            int router_id = active_router_id;
-            int thread_id = fd_to_thread[i];
-            
-            // 使用按行拆包的 helper 读取消息
-            pthread_mutex_lock(&router_states_mutex);
-            ThreadInfo *ti = get_thread_info(router_id, thread_id);
-            pthread_mutex_unlock(&router_states_mutex);
-            
-            if (!ti) {
-                continue;
-            }
-            
-            // 方案一：循环读取同一 fd 上所有完整 JSON 消息
-            // 解决 CANCEL + GETVT 粘在一次 recv 时只处理 CANCEL 的问题
-            while (1) {
-                // interact 阶段：第一次用阻塞读取（flags=0），后续用非阻塞（MSG_DONTWAIT）
-                // 因为 poll 只告诉我们有数据，但不知道有几条完整 JSON
-                Message msg;
-                int read_result = read_one_json_message(ti, MSG_DONTWAIT, &msg);
-                
-                if (read_result < 0) {
-                    // 连接断开或错误
-                    fprintf(stderr, "[DESD ERROR] R%d T%d disconnected or read error.\n", router_id, thread_id);
-                    pthread_mutex_lock(&router_states_mutex);
-                    ti = get_thread_info(router_id, thread_id);
-                    if (ti) {
-                        fprintf(stderr,
-                                "[DESD ERROR] R%d T%d disconnect context: status=%d, blocked_on_request_id='%s', blocked_on_function='%s', pending_timeout_event_id=%lu, monitored_fds_count=%d, VT=%.6f\n",
-                                router_id,
-                                thread_id,
-                                ti->status,
-                                ti->blocked_on_request_id,
-                                ti->blocked_on_function,
-                                ti->pending_timeout_event_id,
-                                ti->monitored_fds_count,
-                                current_virtual_time);
-                        ti->comm_socket_fd = -1;
-                        ti->status = IDLE;
-                        ti->is_active = 0;
-                        ti->recv_len = 0;  // 清空接收缓冲区
-                    }
-                    pthread_mutex_unlock(&router_states_mutex);
-                    break;  // 连接断开，退出此 fd 的循环
-                } else if (read_result == 0) {
-                    // 没有完整消息可读，退出此 fd 的循环
-                    break;
-                }
-                
-                // 成功读取一条消息
+            if (read_result < 0) {
+                // 连接断开或错误
+                fprintf(stderr, "[DESD ERROR] R%d T%d disconnected or read error.\n", router_id, thread_id);
                 pthread_mutex_lock(&router_states_mutex);
                 ti = get_thread_info(router_id, thread_id);
+                if (ti) {
+                    fprintf(stderr,
+                            "[DESD ERROR] R%d T%d disconnect context: status=%d, blocked_on_request_id='%s', blocked_on_function='%s', pending_timeout_event_id=%lu, monitored_fds_count=%d, VT=%.6f\n",
+                            router_id,
+                            thread_id,
+                            ti->status,
+                            ti->blocked_on_request_id,
+                            ti->blocked_on_function,
+                            ti->pending_timeout_event_id,
+                            ti->monitored_fds_count,
+                            current_virtual_time);
+                    ti->comm_socket_fd = -1;
+                    ti->status = IDLE;
+                    ti->is_active = 0;
+                    ti->recv_len = 0;  // 清空接收缓冲区
+                }
+                pthread_mutex_unlock(&router_states_mutex);
+                return;  // 连接断开，退出 interact
+            } else if (read_result == 0) {
+                // 没有完整消息可读，退出内层循环，外层会重新检查线程状态
+                break;
+            }
+            
+            // 成功读取一条消息
+            pthread_mutex_lock(&router_states_mutex);
+            ti = get_thread_info(router_id, thread_id);
+            
+            // 如果该线程处于 DETACHED_WAITING 状态，收到任何消息意味着它已经重新 hook 回来
+            if (ti && ti->detached_waiting) {
+                ti->detached_waiting = 0;
+                num_detached_waiting--;
+                printf("[DESD-DETACH] R%d T%d re-hooked at VT=%.3f with %s (remaining detached: %d)\n",
+                       router_id, thread_id, current_virtual_time, 
+                       event_type_to_string(msg.event_type), num_detached_waiting);
+            }
+            pthread_mutex_unlock(&router_states_mutex);
+            
+            // ===== 处理 active_thread 的消息 =====
+            
+            // CANCEL 入队处理，继续读取后续消息（不 return）
+            if (msg.event_type == CANCEL_BLOCK_REQUEST) {
+                Event cancel_event = {
+                    .timestamp = current_virtual_time,
+                    .router_id = router_id,
+                    .thread_id = thread_id,
+                    .event_type = CANCEL_BLOCK_REQUEST,
+                    .event_id = generate_event_id(),
+                    .payload = msg.payload
+                };
+                push_event(cancel_event);
+                printf("[DESD-INTERACT] R%d T%d sent CANCEL_BLOCK_REQUEST, queued at VT=%.3f (EventID: %lu). Continuing to read more messages.\n",
+                       router_id, thread_id, current_virtual_time, cancel_event.event_id);
+                continue;  // 继续读取下一条消息
+            }
+            
+            // GET_VIRTUAL_TIME: 统一入队处理，立即返回主循环让事件被处理
+            // 重要：GETVT 也是阻塞型 RPC，线程在等 DESD 回复期间是 BLOCKED 状态
+            if (msg.event_type == GET_VIRTUAL_TIME_EVENT) {
+                Event vt_event = {
+                    .timestamp = current_virtual_time,
+                    .router_id = router_id,
+                    .thread_id = thread_id,
+                    .event_type = GET_VIRTUAL_TIME_EVENT,
+                    .event_id = generate_event_id(),
+                    .payload = msg.payload
+                };
+                push_event(vt_event);
                 
-                // 如果该线程处于 DETACHED_WAITING 状态，收到任何消息意味着它已经重新 hook 回来
-                if (ti && ti->detached_waiting) {
-                    ti->detached_waiting = 0;
-                    num_detached_waiting--;
-                    printf("[DESD-DETACH] R%d T%d re-hooked at VT=%.3f with %s (remaining detached: %d)\n",
-                           router_id, thread_id, current_virtual_time, 
-                           event_type_to_string(msg.event_type), num_detached_waiting);
+                // 标记线程为 BLOCKED，等待 GETVT 事件被处理并回复
+                pthread_mutex_lock(&router_states_mutex);
+                ti = get_thread_info(router_id, thread_id);
+                if (ti) {
+                    strncpy(ti->blocked_on_request_id, msg.request_id, 63);
+                    ti->blocked_on_request_id[63] = '\0';
+                    ti->status = BLOCKED;
                 }
                 pthread_mutex_unlock(&router_states_mutex);
                 
-                // ===== 处理 active_router 的消息 =====
-                
-                // CANCEL 入队处理，继续读取后续消息（不 return）
-                if (msg.event_type == CANCEL_BLOCK_REQUEST) {
-                    Event cancel_event = {
-                        .timestamp = current_virtual_time,
-                        .router_id = router_id,
-                        .thread_id = thread_id,
-                        .event_type = CANCEL_BLOCK_REQUEST,
-                        .event_id = generate_event_id(),
-                        .payload = msg.payload
-                    };
-                    push_event(cancel_event);
-                    printf("[DESD-INTERACT] R%d T%d sent CANCEL_BLOCK_REQUEST, queued at VT=%.3f (EventID: %lu). Continuing to read more messages.\n",
-                           router_id, thread_id, current_virtual_time, cancel_event.event_id);
-                    continue;  // 继续读取此 fd 的下一条消息
-                }
-                
-                // GET_VIRTUAL_TIME: 统一入队处理，立即返回主循环让事件被处理
-                if (msg.event_type == GET_VIRTUAL_TIME_EVENT) {
-                    Event vt_event = {
-                        .timestamp = current_virtual_time,
-                        .router_id = router_id,
-                        .thread_id = thread_id,
-                        .event_type = GET_VIRTUAL_TIME_EVENT,
-                        .event_id = generate_event_id(),
-                        .payload = msg.payload
-                    };
-                    push_event(vt_event);
-                    printf("[DESD-INTERACT] R%d T%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), queued at VT=%.3f. Returning to main loop.\n",
-                           router_id, thread_id, msg.request_id, current_virtual_time);
-                    return;  // 返回主循环处理 GETVT
-                }
-                
-                // 瞬时事件：统一入队处理，并立即返回主循环
-                if (msg.event_type == LISTEN_EVENT ||
-                    msg.event_type == CONNECTION_INFO_EVENT ||
-                    msg.event_type == CLOSE_SOCKET_EVENT) {
-                    Event instant_event = {
-                        .timestamp = current_virtual_time,
-                        .router_id = router_id,
-                        .thread_id = thread_id,
-                        .event_type = msg.event_type,
-                        .event_id = generate_event_id(),
-                        .payload = msg.payload
-                    };
-                    push_event(instant_event);
-                    printf("[DESD-INTERACT] R%d T%d sent %s (ReqID: %s), queued at VT=%.3f. Returning to main loop.\n",
-                           router_id, thread_id, event_type_to_string(msg.event_type),
-                           msg.request_id, current_virtual_time);
-                    return;  // 立即返回主循环处理
-                }
-                
-                // 阻塞类请求（ROUTER_BLOCK_REQUEST, PACKET_SEND, CONNECT_REQUEST 等）
-                double event_timestamp = current_virtual_time;
-                if (msg.event_type == PACKET_SEND_EVENT) {
-                    event_timestamp = current_virtual_time + 0.002;
-                }
-                
-                Event next_event = {
-                    .timestamp = event_timestamp,
+                printf("[DESD-INTERACT] R%d T%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), marked BLOCKED, queued at VT=%.3f. Returning to main loop.\n",
+                       router_id, thread_id, msg.request_id, current_virtual_time);
+                return;  // 返回主循环处理 GETVT
+            }
+            
+            // LISTEN/CONNECTION_INFO/CLOSE_SOCKET: 也是阻塞型 RPC，需要标记 BLOCKED
+            if (msg.event_type == LISTEN_EVENT ||
+                msg.event_type == CONNECTION_INFO_EVENT ||
+                msg.event_type == CLOSE_SOCKET_EVENT) {
+                Event instant_event = {
+                    .timestamp = current_virtual_time,
                     .router_id = router_id,
                     .thread_id = thread_id,
                     .event_type = msg.event_type,
                     .event_id = generate_event_id(),
                     .payload = msg.payload
                 };
-                push_event(next_event);
+                push_event(instant_event);
                 
-                printf("[DESD-INTERACT] R%d T%d sent %s (ReqID: %s), queued at VT=%.3f. Returning to main loop.\n",
+                // 标记线程为 BLOCKED，等待事件被处理并回复
+                pthread_mutex_lock(&router_states_mutex);
+                ti = get_thread_info(router_id, thread_id);
+                if (ti) {
+                    strncpy(ti->blocked_on_request_id, msg.request_id, 63);
+                    ti->blocked_on_request_id[63] = '\0';
+                    ti->status = BLOCKED;
+                }
+                pthread_mutex_unlock(&router_states_mutex);
+                
+                printf("[DESD-INTERACT] R%d T%d sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f. Returning to main loop.\n",
                        router_id, thread_id, event_type_to_string(msg.event_type),
-                       msg.request_id, event_timestamp);
+                       msg.request_id, current_virtual_time);
+                return;  // 返回主循环处理
+            }
+            
+            // === Mutex Hook 消息：即时处理，不入队列 ===
+            if (msg.event_type == MUTEX_LOCK_ACQUIRED ||
+                msg.event_type == MUTEX_WAIT_START ||
+                msg.event_type == MUTEX_UNLOCK) {
+                // 从 payload 解析 mutex_addr
+                uintptr_t mutex_addr = 0;
+                json_error_t json_err;
+                json_t *mutex_payload = json_loads(msg.payload.json_str, 0, &json_err);
+                if (mutex_payload) {
+                    json_t *addr_json = json_object_get(mutex_payload, "mutex_addr");
+                    if (addr_json && json_is_integer(addr_json)) {
+                        mutex_addr = (uintptr_t)json_integer_value(addr_json);
+                    }
+                    json_decref(mutex_payload);
+                }
                 
-                // 返回主循环处理入队的事件
-                return;
-            }  // end while(1) for this fd
-        }
-    }
+                if (msg.event_type == MUTEX_LOCK_ACQUIRED) {
+                    handle_mutex_lock_acquired(router_id, thread_id, mutex_addr);
+                    continue;  // 继续读取下一条消息
+                } else if (msg.event_type == MUTEX_WAIT_START) {
+                    handle_mutex_wait_start(router_id, thread_id, mutex_addr);
+                    // MUTEX_WAIT_START 会将线程标记为 BLOCKED
+                    // 外层 while 开头会检查线程状态，发现 BLOCKED 后会自动退出
+                    break;  // 退出内层读取循环
+                } else if (msg.event_type == MUTEX_UNLOCK) {
+                    handle_mutex_unlock_msg(router_id, thread_id, mutex_addr);
+                    continue;  // 继续读取下一条消息
+                }
+            }
+            
+            // 阻塞类请求（ROUTER_BLOCK_REQUEST, PACKET_SEND, CONNECT_REQUEST 等）
+            double event_timestamp = current_virtual_time;
+            if (msg.event_type == PACKET_SEND_EVENT) {
+                event_timestamp = current_virtual_time + 0.002;
+            }
+            
+            Event next_event = {
+                .timestamp = event_timestamp,
+                .router_id = router_id,
+                .thread_id = thread_id,
+                .event_type = msg.event_type,
+                .event_id = generate_event_id(),
+                .payload = msg.payload
+            };
+            push_event(next_event);
+            
+            // 记录线程正在等待的请求，标记为 BLOCKED
+            pthread_mutex_lock(&router_states_mutex);
+            ti = get_thread_info(router_id, thread_id);
+            if (ti) {
+                strncpy(ti->blocked_on_request_id, msg.request_id, 63);
+                ti->blocked_on_request_id[63] = '\0';
+                ti->status = BLOCKED;
+            }
+            pthread_mutex_unlock(&router_states_mutex);
+            
+            printf("[DESD-INTERACT] R%d T%d sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f. Returning to main loop.\n",
+                   router_id, thread_id, event_type_to_string(msg.event_type),
+                   msg.request_id, event_timestamp);
+            
+            // 返回主循环处理入队的事件
+            return;
+        }  // end while(1) for reading messages
+    }  // end while(1) for interact loop
 }
 
 // wait_for_detached_threads_to_rehook: 等待所有 DETACHED_WAITING 线程重新 hook 回来
@@ -1882,12 +2013,19 @@ void desd_event_loop() {
         RouterStatus status_after_event = thread_info ? thread_info->status : IDLE;
         
         // 路由器主动发起的事件类型（不含 ROUTER_START，后者单独用 IDLE->RUNNING 判断）
+        // 注意：GET_VIRTUAL_TIME_EVENT 不在此列表中，因为：
+        // 1. GETVT 被建模为阻塞型 RPC：收到时线程标记为 BLOCKED，回复后改回 RUNNING
+        // 2. handle_get_virtual_time_event 处理完后线程变成 RUNNING，但这只是一次同步查询（RPC 返回），
+        //    之后线程可能长时间只在应用侧执行 CPU/mutex 操作，而不再立即发起新的 DES 事件
+        // 3. 如果此时进入 interact 并持续等待该线程的消息，而线程只发送 MUTEX_LOCK/UNLOCK 等瞬时事件，
+        //    会导致 DESD 长时间停留在 interact 阶段，其他路由器事件得不到调度
         int is_router_initiated_event = (
             current_event.event_type == PACKET_SEND_EVENT ||
             current_event.event_type == CONNECT_REQUEST_EVENT ||
-            current_event.event_type == ROUTER_BLOCK_REQUEST ||
-            current_event.event_type == GET_VIRTUAL_TIME_EVENT
+            current_event.event_type == ROUTER_BLOCK_REQUEST
         );
+
+        int is_getvt_event = (current_event.event_type == GET_VIRTUAL_TIME_EVENT);
         
         // CANCEL_BLOCK_REQUEST 特殊处理：
         // CANCEL 导致的 BLOCKED->RUNNING 不应触发 interact，因为：
@@ -1907,7 +2045,7 @@ void desd_event_loop() {
             status_after_event == RUNNING
         );
 
-        int should_wait_for_router = !is_cancel_event && (
+        int should_wait_for_router = !is_cancel_event && !is_getvt_event && (
             (status_before_event == BLOCKED && status_after_event == RUNNING) || // 路由器解除阻塞
             is_initial_start ||                                                 // 首次 ROUTER_START: IDLE -> RUNNING
             (is_router_initiated_event && status_after_event == RUNNING)        // 处理了路由器主动发起的事件
@@ -1936,13 +2074,13 @@ void desd_event_loop() {
             pthread_mutex_unlock(&router_states_mutex);
             
             if (has_running_threads) {
-                // 进入单路由器交互阶段
-                // 这里 current_event.router_id 就是当前的 active_router
-                printf("[DESD-DEBUG] Enter interact_with_router_until_it_blocks(router=%d)\n",
-                       current_event.router_id);
-                interact_with_router_until_it_blocks(current_event.router_id);
-                printf("[DESD-DEBUG] Leave interact_with_router_until_it_blocks(router=%d)\n",
-                       current_event.router_id);
+                // 进入单线程交互阶段
+                // 只与当前事件对应的线程交互，直到它再次阻塞
+                printf("[DESD-DEBUG] Enter interact_with_router_until_it_blocks(router=%d, thread=%d)\n",
+                       current_event.router_id, current_event.thread_id);
+                interact_with_router_until_it_blocks(current_event.router_id, current_event.thread_id);
+                printf("[DESD-DEBUG] Leave interact_with_router_until_it_blocks(router=%d, thread=%d)\n",
+                       current_event.router_id, current_event.thread_id);
             } else {
                 // 该 router 没有 RUNNING 线程（可能都已经 BLOCKED），跳过 interact
                 printf("[DESD-LOOP] R%d has no RUNNING threads after processing event %s, skipping interact phase.\n",
@@ -1990,6 +2128,9 @@ void handle_event(Event event) {
             break;
         case CANCEL_BLOCK_REQUEST:
             handle_cancel_block_request(event);
+            break;
+        case MUTEX_RETRY_EVENT:
+            handle_mutex_retry_event(event);
             break;
         default:
             fprintf(stderr, "[DESD WARNING] Unknown event type in handle_event: %d\n", event.event_type);
@@ -2098,6 +2239,14 @@ void handle_listen_event(Event event) {
         if (router_states[router_id].listen_count >= 10) {
             fprintf(stderr, "[DESD ERROR] R%d listen address limit reached (max: 10)!\n", router_id);
             send_error_response(router_id, event.thread_id, request_id, "Too many listen addresses");
+            // 即使出错也要把线程改回 RUNNING
+            pthread_mutex_lock(&router_states_mutex);
+            ThreadInfo *ti_err = get_thread_info(router_id, event.thread_id);
+            if (ti_err && ti_err->status == BLOCKED) {
+                ti_err->status = RUNNING;
+                ti_err->blocked_on_request_id[0] = '\0';
+            }
+            pthread_mutex_unlock(&router_states_mutex);
             return;
         }
         
@@ -2107,6 +2256,14 @@ void handle_listen_event(Event event) {
                 printf("[DESD] R%d already listening on %s, ignoring duplicate.\n", 
                        router_id, listen_address_local);
                 send_success_response(router_id, event.thread_id, request_id, "LISTEN", "Already Listening", NULL);
+                // 重复 listen 也要把线程改回 RUNNING
+                pthread_mutex_lock(&router_states_mutex);
+                ThreadInfo *ti_dup = get_thread_info(router_id, event.thread_id);
+                if (ti_dup && ti_dup->status == BLOCKED) {
+                    ti_dup->status = RUNNING;
+                    ti_dup->blocked_on_request_id[0] = '\0';
+                }
+                pthread_mutex_unlock(&router_states_mutex);
                 return;
             }
         }
@@ -2124,8 +2281,19 @@ void handle_listen_event(Event event) {
                router_states[router_id].listen_count,
                router_states[router_id].listen_count > 1 ? "es" : "");
         
-        // listen() 是非阻塞的，立即返回成功
+        // 发送响应
         send_success_response(router_id, event.thread_id, request_id, "LISTEN", "Listen Successful", NULL);
+        
+        // 回复发送后，将线程状态从 BLOCKED 改回 RUNNING
+        pthread_mutex_lock(&router_states_mutex);
+        ThreadInfo *ti = get_thread_info(router_id, event.thread_id);
+        if (ti && ti->status == BLOCKED) {
+            if (strncmp(ti->blocked_on_request_id, request_id, 63) == 0) {
+                ti->status = RUNNING;
+                ti->blocked_on_request_id[0] = '\0';
+            }
+        }
+        pthread_mutex_unlock(&router_states_mutex);
     }
 }
 
@@ -2576,6 +2744,14 @@ void handle_connection_info_event(Event event) {
         
         json_decref(payload_obj);
         send_success_response(router_id, event.thread_id, request_id, "CONNECTION_INFO", "Accept failure processed", NULL);
+        // accept failure 处理后也要把线程改回 RUNNING
+        pthread_mutex_lock(&router_states_mutex);
+        ThreadInfo *ti_fail = get_thread_info(router_id, event.thread_id);
+        if (ti_fail && ti_fail->status == BLOCKED) {
+            ti_fail->status = RUNNING;
+            ti_fail->blocked_on_request_id[0] = '\0';
+        }
+        pthread_mutex_unlock(&router_states_mutex);
         return;
     }
     
@@ -2742,6 +2918,17 @@ void handle_connection_info_event(Event event) {
     
     json_decref(payload_obj);
     send_success_response(router_id, event.thread_id, request_id, "CONNECTION_INFO", "Connection Info Recorded", NULL);
+    
+    // 回复发送后，将线程状态从 BLOCKED 改回 RUNNING
+    pthread_mutex_lock(&router_states_mutex);
+    ThreadInfo *ti = get_thread_info(router_id, event.thread_id);
+    if (ti && ti->status == BLOCKED) {
+        if (strncmp(ti->blocked_on_request_id, request_id, 63) == 0) {
+            ti->status = RUNNING;
+            ti->blocked_on_request_id[0] = '\0';
+        }
+    }
+    pthread_mutex_unlock(&router_states_mutex);
 }
 
 void handle_close_socket_event(Event event) {
@@ -2865,6 +3052,17 @@ void handle_close_socket_event(Event event) {
     
     // 发送SUCCESS响应，确保router在desd清理完成后才继续执行（DES框架要求）
     send_success_response(router_id, event.thread_id, request_id, "CLOSE_SOCKET", "Socket closed (single-sided)", NULL);
+    
+    // 回复发送后，将线程状态从 BLOCKED 改回 RUNNING
+    pthread_mutex_lock(&router_states_mutex);
+    ThreadInfo *ti = get_thread_info(router_id, event.thread_id);
+    if (ti && ti->status == BLOCKED) {
+        if (strncmp(ti->blocked_on_request_id, request_id, 63) == 0) {
+            ti->status = RUNNING;
+            ti->blocked_on_request_id[0] = '\0';
+        }
+    }
+    pthread_mutex_unlock(&router_states_mutex);
 }
 
 void handle_router_block_request(Event event) {
@@ -4190,7 +4388,211 @@ void handle_get_virtual_time_event(Event event) {
     free(payload_str);
     
     send_message_to_router(router_id, &response);
+    
+    // 回复发送后，将线程状态从 BLOCKED 改回 RUNNING
+    // 这样线程可以继续执行，也允许 DESD 在后续事件中与其交互
+    pthread_mutex_lock(&router_states_mutex);
+    ThreadInfo *ti = get_thread_info(router_id, thread_id);
+    if (ti && ti->status == BLOCKED) {
+        // 只有当线程确实在等这个 GETVT 回复时才改状态
+        // 检查 blocked_on_request_id 是否匹配（防止误改其他阻塞原因）
+        if (strncmp(ti->blocked_on_request_id, request_id_local, 63) == 0) {
+            ti->status = RUNNING;
+            ti->blocked_on_request_id[0] = '\0';
+        }
+    }
+    pthread_mutex_unlock(&router_states_mutex);
+    
     //GET_VIRTUAL_TIME_EVENT 不打印
     // printf("[DESD] R%d GET_VIRTUAL_TIME_EVENT responded with VT=%.6f (ReqID: %s).\n", 
     //        router_id, current_virtual_time, request_id_local);
+}
+
+// === Mutex Hook 相关函数实现 ===
+
+// 查找或创建 mutex 表项
+static MutexInfo* find_or_create_mutex(uintptr_t mutex_addr) {
+    // 先查找现有的
+    for (int i = 0; i < MAX_TRACKED_MUTEXES; i++) {
+        if (mutex_table[i].is_active && mutex_table[i].mutex_addr == mutex_addr) {
+            return &mutex_table[i];
+        }
+    }
+    
+    // 没找到，创建新的
+    for (int i = 0; i < MAX_TRACKED_MUTEXES; i++) {
+        if (!mutex_table[i].is_active) {
+            memset(&mutex_table[i], 0, sizeof(MutexInfo));
+            mutex_table[i].mutex_addr = mutex_addr;
+            mutex_table[i].is_active = 1;
+            mutex_table_count++;
+            printf("[DESD-MUTEX] Created new mutex entry for addr=0x%lx (total tracked: %d)\n",
+                   (unsigned long)mutex_addr, mutex_table_count);
+            return &mutex_table[i];
+        }
+    }
+    
+    fprintf(stderr, "[DESD-MUTEX ERROR] Mutex table full! Cannot track mutex 0x%lx\n",
+            (unsigned long)mutex_addr);
+    return NULL;
+}
+
+// 处理 MUTEX_LOCK_ACQUIRED：线程成功获取 mutex（单向通知）
+static void handle_mutex_lock_acquired(int router_id, int thread_id, uintptr_t mutex_addr) {
+    MutexInfo *mi = find_or_create_mutex(mutex_addr);
+    if (!mi) return;
+    
+    mi->owner_router_id = router_id;
+    mi->owner_thread_id = thread_id;
+    
+    printf("[DESD-MUTEX] R%d T%d acquired mutex 0x%lx\n",
+           router_id, thread_id, (unsigned long)mutex_addr);
+}
+
+// 处理 MUTEX_WAIT_START：线程尝试加锁失败，进入等待状态
+static void handle_mutex_wait_start(int router_id, int thread_id, uintptr_t mutex_addr) {
+    MutexInfo *mi = find_or_create_mutex(mutex_addr);
+    if (!mi) return;
+    
+    // 将线程加入等待队列
+    if (mi->waiter_count >= MAX_MUTEX_WAITERS) {
+        fprintf(stderr, "[DESD-MUTEX ERROR] Waiter queue full for mutex 0x%lx\n",
+                (unsigned long)mutex_addr);
+        return;
+    }
+    
+    mi->waiters[mi->waiter_count].router_id = router_id;
+    mi->waiters[mi->waiter_count].thread_id = thread_id;
+    mi->waiter_count++;
+    
+    // 将线程标记为 BLOCKED（等待 mutex）
+    pthread_mutex_lock(&router_states_mutex);
+    ThreadInfo *ti = get_thread_info(router_id, thread_id);
+    if (ti) {
+        ti->status = BLOCKED;
+        // 使用 blocked_on_function 来标记是在等 mutex
+        snprintf(ti->blocked_on_function, sizeof(ti->blocked_on_function),
+                 "MUTEX_0x%lx", (unsigned long)mutex_addr);
+    }
+    pthread_mutex_unlock(&router_states_mutex);
+    
+    printf("[DESD-MUTEX] R%d T%d waiting on mutex 0x%lx (owner: R%d T%d, waiters: %d)\n",
+           router_id, thread_id, (unsigned long)mutex_addr,
+           mi->owner_router_id, mi->owner_thread_id, mi->waiter_count);
+}
+
+// 处理 MUTEX_UNLOCK：线程释放 mutex
+static void handle_mutex_unlock_msg(int router_id, int thread_id, uintptr_t mutex_addr) {
+    MutexInfo *mi = find_or_create_mutex(mutex_addr);
+    if (!mi) return;
+    
+    // 清空 owner
+    mi->owner_router_id = 0;
+    mi->owner_thread_id = 0;
+    
+    printf("[DESD-MUTEX] R%d T%d released mutex 0x%lx (waiters: %d)\n",
+           router_id, thread_id, (unsigned long)mutex_addr, mi->waiter_count);
+
+    // 如果没有等待者，可以回收该 mutex 表项，避免长时间占用 slot
+    if (mi->waiter_count == 0) {
+        mi->is_active = 0;
+        mi->mutex_addr = 0;
+        mi->owner_router_id = 0;
+        mi->owner_thread_id = 0;
+        if (mutex_table_count > 0) {
+            mutex_table_count--;
+        }
+        return;
+    }
+
+    // 如果有等待者，生成 MUTEX_RETRY_EVENT
+    if (mi->waiter_count > 0) {
+        // 取出队首的等待者（FIFO）
+        int waiter_router = mi->waiters[0].router_id;
+        int waiter_thread = mi->waiters[0].thread_id;
+        
+        // 移除队首（左移）
+        for (int i = 0; i < mi->waiter_count - 1; i++) {
+            mi->waiters[i] = mi->waiters[i + 1];
+        }
+        mi->waiter_count--;
+        
+        // 生成 MUTEX_RETRY_EVENT
+        Event retry_event = {
+            .timestamp = current_virtual_time,  // 方案 A：不推进虚拟时间
+            .router_id = waiter_router,
+            .thread_id = waiter_thread,
+            .event_type = MUTEX_RETRY_EVENT,
+            .event_id = generate_event_id()
+        };
+        
+        // 在 payload 中包含 mutex_addr
+        json_t *payload_obj = json_object();
+        json_object_set_new(payload_obj, "mutex_addr", json_integer((json_int_t)mutex_addr));
+        char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
+        strncpy(retry_event.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+        retry_event.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+        free(payload_str);
+        json_decref(payload_obj);
+        
+        push_event(retry_event);
+        
+        printf("[DESD-MUTEX] Generated MUTEX_RETRY_EVENT for R%d T%d on mutex 0x%lx at VT=%.3f (EventID: %lu)\n",
+               waiter_router, waiter_thread, (unsigned long)mutex_addr,
+               current_virtual_time, retry_event.event_id);
+    }
+}
+
+// 处理 MUTEX_RETRY_EVENT：唤醒等待的线程
+void handle_mutex_retry_event(Event event) {
+    int router_id = event.router_id;
+    int thread_id = event.thread_id;
+    
+    // 从 payload 解析 mutex_addr
+    uintptr_t mutex_addr = 0;
+    json_error_t error;
+    json_t *payload_obj = json_loads(event.payload.json_str, 0, &error);
+    if (payload_obj) {
+        json_t *addr_json = json_object_get(payload_obj, "mutex_addr");
+        if (addr_json && json_is_integer(addr_json)) {
+            mutex_addr = (uintptr_t)json_integer_value(addr_json);
+        }
+        json_decref(payload_obj);
+    }
+    
+    printf("[DESD-MUTEX] Processing MUTEX_RETRY_EVENT for R%d T%d on mutex 0x%lx at VT=%.3f\n",
+           router_id, thread_id, (unsigned long)mutex_addr, current_virtual_time);
+    
+    // 更新线程状态为 RUNNING
+    pthread_mutex_lock(&router_states_mutex);
+    ThreadInfo *ti = get_thread_info(router_id, thread_id);
+    if (ti) {
+        ti->status = RUNNING;
+        memset(ti->blocked_on_function, 0, sizeof(ti->blocked_on_function));
+    }
+    pthread_mutex_unlock(&router_states_mutex);
+    
+    // 发送 MUTEX_RESUME 给 BIRD
+    json_t *resp_payload_obj = json_object();
+    json_object_set_new(resp_payload_obj, "status", json_string("MUTEX_RESUME"));
+    json_object_set_new(resp_payload_obj, "mutex_addr", json_integer((json_int_t)mutex_addr));
+    char *payload_str = json_dumps(resp_payload_obj, JSON_COMPACT);
+    json_decref(resp_payload_obj);
+    
+    Message response = {
+        .message_type = DESD_TO_HOOK,
+        .router_id = router_id,
+        .thread_id = thread_id,
+        .event_type = MUTEX_RETRY_EVENT,
+        .virtual_time = current_virtual_time
+    };
+    snprintf(response.request_id, sizeof(response.request_id), "mutex_retry_%lu", event.event_id);
+    strncpy(response.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+    response.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+    free(payload_str);
+    
+    send_message_to_thread(router_id, thread_id, &response);
+    
+    printf("[DESD-MUTEX] Sent MUTEX_RESUME to R%d T%d for mutex 0x%lx\n",
+           router_id, thread_id, (unsigned long)mutex_addr);
 }

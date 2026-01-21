@@ -119,22 +119,26 @@ char* message_to_json(const Message* msg) {
         json_object_set_new(root, "payload", payload_obj);
     }
 
-    if (msg->message_type == HOOK_TO_DESD) {
-        json_object_set_new(root, "event_type", json_string(
-            msg->event_type == ROUTER_START ? "ROUTER_START" :
-            msg->event_type == ROUTER_BLOCK_REQUEST ? "ROUTER_BLOCK_REQUEST" :
-            msg->event_type == PACKET_SEND_EVENT ? "PACKET_SEND_EVENT" :
-            msg->event_type == PACKET_RECEIVE_EVENT ? "PACKET_RECEIVE_EVENT" :
-            msg->event_type == TIMEOUT_EVENT ? "TIMEOUT_EVENT" :
-            msg->event_type == CONNECT_REQUEST_EVENT ? "CONNECT_REQUEST_EVENT" :
-            msg->event_type == CONNECTION_ESTABLISHED_EVENT ? "CONNECTION_ESTABLISHED_EVENT" :
-            msg->event_type == LISTEN_EVENT ? "LISTEN_EVENT" :
-            msg->event_type == CONNECTION_INFO_EVENT ? "CONNECTION_INFO_EVENT" :
-            msg->event_type == CLOSE_SOCKET_EVENT ? "CLOSE_SOCKET_EVENT" :
-            msg->event_type == CANCEL_BLOCK_REQUEST ? "CANCEL_BLOCK_REQUEST" :
-            msg->event_type == GET_VIRTUAL_TIME_EVENT ? "GET_VIRTUAL_TIME_EVENT" : "UNKNOWN"
-        ));
-    }
+    // 对于 HOOK_TO_DESD 和 DESD_TO_HOOK，两种方向的消息都统一带上 event_type，
+    // 便于像 MUTEX_RESUME 这类异步响应在 hook 端通过 event_type 进行识别。
+    json_object_set_new(root, "event_type", json_string(
+        msg->event_type == ROUTER_START ? "ROUTER_START" :
+        msg->event_type == ROUTER_BLOCK_REQUEST ? "ROUTER_BLOCK_REQUEST" :
+        msg->event_type == PACKET_SEND_EVENT ? "PACKET_SEND_EVENT" :
+        msg->event_type == PACKET_RECEIVE_EVENT ? "PACKET_RECEIVE_EVENT" :
+        msg->event_type == TIMEOUT_EVENT ? "TIMEOUT_EVENT" :
+        msg->event_type == CONNECT_REQUEST_EVENT ? "CONNECT_REQUEST_EVENT" :
+        msg->event_type == CONNECTION_ESTABLISHED_EVENT ? "CONNECTION_ESTABLISHED_EVENT" :
+        msg->event_type == LISTEN_EVENT ? "LISTEN_EVENT" :
+        msg->event_type == CONNECTION_INFO_EVENT ? "CONNECTION_INFO_EVENT" :
+        msg->event_type == CLOSE_SOCKET_EVENT ? "CLOSE_SOCKET_EVENT" :
+        msg->event_type == CANCEL_BLOCK_REQUEST ? "CANCEL_BLOCK_REQUEST" :
+        msg->event_type == GET_VIRTUAL_TIME_EVENT ? "GET_VIRTUAL_TIME_EVENT" :
+        msg->event_type == MUTEX_LOCK_ACQUIRED ? "MUTEX_LOCK_ACQUIRED" :
+        msg->event_type == MUTEX_WAIT_START ? "MUTEX_WAIT_START" :
+        msg->event_type == MUTEX_UNLOCK ? "MUTEX_UNLOCK" :
+        msg->event_type == MUTEX_RETRY_EVENT ? "MUTEX_RETRY_EVENT" : "UNKNOWN"
+    ));
 
     char *json_dump = json_dumps(root, JSON_COMPACT);
     json_decref(root);
@@ -169,23 +173,27 @@ void json_to_message(const char* json_str, Message* msg) {
     
     msg->virtual_time = json_real_value(json_object_get(root, "virtual_time"));
 
-    if (msg->message_type == HOOK_TO_DESD) {
-        json_t *event_type_json = json_object_get(root, "event_type");
-        const char* event_type_str = event_type_json ? json_string_value(event_type_json) : NULL;
-        if (event_type_str && strcmp(event_type_str, "ROUTER_START") == 0) msg->event_type = ROUTER_START;
-        else if (event_type_str && strcmp(event_type_str, "ROUTER_BLOCK_REQUEST") == 0) msg->event_type = ROUTER_BLOCK_REQUEST;
-        else if (event_type_str && strcmp(event_type_str, "PACKET_SEND_EVENT") == 0) msg->event_type = PACKET_SEND_EVENT;
-        else if (event_type_str && strcmp(event_type_str, "PACKET_RECEIVE_EVENT") == 0) msg->event_type = PACKET_RECEIVE_EVENT;
-        else if (event_type_str && strcmp(event_type_str, "TIMEOUT_EVENT") == 0) msg->event_type = TIMEOUT_EVENT;
-        else if (event_type_str && strcmp(event_type_str, "CONNECT_REQUEST_EVENT") == 0) msg->event_type = CONNECT_REQUEST_EVENT;
-        else if (event_type_str && strcmp(event_type_str, "CONNECTION_ESTABLISHED_EVENT") == 0) msg->event_type = CONNECTION_ESTABLISHED_EVENT;
-        else if (event_type_str && strcmp(event_type_str, "LISTEN_EVENT") == 0) msg->event_type = LISTEN_EVENT;
-        else if (event_type_str && strcmp(event_type_str, "CONNECTION_INFO_EVENT") == 0) msg->event_type = CONNECTION_INFO_EVENT;
-        else if (event_type_str && strcmp(event_type_str, "CLOSE_SOCKET_EVENT") == 0) msg->event_type = CLOSE_SOCKET_EVENT;
-        else if (event_type_str && strcmp(event_type_str, "CANCEL_BLOCK_REQUEST") == 0) msg->event_type = CANCEL_BLOCK_REQUEST;
-        else if (event_type_str && strcmp(event_type_str, "GET_VIRTUAL_TIME_EVENT") == 0) msg->event_type = GET_VIRTUAL_TIME_EVENT;
-        else msg->event_type = -1; // Unknown
-    }
+    // 统一解析 event_type：无论是 HOOK_TO_DESD 还是 DESD_TO_HOOK，只要带有 event_type 字段就进行解码，
+    // 这样 hook 端也能通过 event_type 识别诸如 MUTEX_RETRY_EVENT 之类的响应。
+    json_t *event_type_json = json_object_get(root, "event_type");
+    const char* event_type_str = event_type_json ? json_string_value(event_type_json) : NULL;
+    if (event_type_str && strcmp(event_type_str, "ROUTER_START") == 0) msg->event_type = ROUTER_START;
+    else if (event_type_str && strcmp(event_type_str, "ROUTER_BLOCK_REQUEST") == 0) msg->event_type = ROUTER_BLOCK_REQUEST;
+    else if (event_type_str && strcmp(event_type_str, "PACKET_SEND_EVENT") == 0) msg->event_type = PACKET_SEND_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "PACKET_RECEIVE_EVENT") == 0) msg->event_type = PACKET_RECEIVE_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "TIMEOUT_EVENT") == 0) msg->event_type = TIMEOUT_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "CONNECT_REQUEST_EVENT") == 0) msg->event_type = CONNECT_REQUEST_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "CONNECTION_ESTABLISHED_EVENT") == 0) msg->event_type = CONNECTION_ESTABLISHED_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "LISTEN_EVENT") == 0) msg->event_type = LISTEN_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "CONNECTION_INFO_EVENT") == 0) msg->event_type = CONNECTION_INFO_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "CLOSE_SOCKET_EVENT") == 0) msg->event_type = CLOSE_SOCKET_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "CANCEL_BLOCK_REQUEST") == 0) msg->event_type = CANCEL_BLOCK_REQUEST;
+    else if (event_type_str && strcmp(event_type_str, "GET_VIRTUAL_TIME_EVENT") == 0) msg->event_type = GET_VIRTUAL_TIME_EVENT;
+    else if (event_type_str && strcmp(event_type_str, "MUTEX_LOCK_ACQUIRED") == 0) msg->event_type = MUTEX_LOCK_ACQUIRED;
+    else if (event_type_str && strcmp(event_type_str, "MUTEX_WAIT_START") == 0) msg->event_type = MUTEX_WAIT_START;
+    else if (event_type_str && strcmp(event_type_str, "MUTEX_UNLOCK") == 0) msg->event_type = MUTEX_UNLOCK;
+    else if (event_type_str && strcmp(event_type_str, "MUTEX_RETRY_EVENT") == 0) msg->event_type = MUTEX_RETRY_EVENT;
+    else msg->event_type = -1; // Unknown
 
     json_t *payload_obj = json_object_get(root, "payload");
     if (payload_obj) {

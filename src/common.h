@@ -30,7 +30,13 @@ typedef enum {
     CONNECTION_INFO_EVENT,    // libdeshook.so -> desd：通知desd新建立的连接信息（accept返回后）
     CLOSE_SOCKET_EVENT,       // libdeshook.so -> desd：通知desd socket已关闭
     GET_VIRTUAL_TIME_EVENT,   // libdeshook.so -> desd：请求当前虚拟时间
-    CANCEL_BLOCK_REQUEST      // libdeshook.so -> desd：取消之前的阻塞请求（本地fd提前ready时使用）
+    CANCEL_BLOCK_REQUEST,     // libdeshook.so -> desd：取消之前的阻塞请求（本地fd提前ready时使用）
+    
+    // === Mutex Hook 相关事件类型 ===
+    MUTEX_LOCK_ACQUIRED,      // libdeshook.so -> desd：线程成功获取 mutex（单向通知，无需响应）
+    MUTEX_WAIT_START,         // libdeshook.so -> desd：线程尝试加锁失败，进入等待状态
+    MUTEX_UNLOCK,             // libdeshook.so -> desd：线程释放 mutex
+    MUTEX_RETRY_EVENT         // desd内部事件：通知等待的线程可以重试加锁
 
 } EventType;
 

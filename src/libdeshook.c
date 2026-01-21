@@ -19,6 +19,7 @@
 #include <stdarg.h> // For va_list, va_start, va_end
 #include <time.h> // For clock_gettime
 #include <pthread.h> // For thread safety
+#include <stdint.h> // For uintptr_t
 
 // --- Global State ---
 #define MAX_TRACKED_FDS 1024
@@ -75,6 +76,14 @@ static ssize_t (*real_read)(int, void *, size_t) = NULL;
 static ssize_t (*real_write)(int, const void *, size_t) = NULL;
 static int (*real_fcntl)(int, int, ...) = NULL;
 static int (*real_clock_gettime)(clockid_t, struct timespec *) = NULL;
+
+// Mutex hook 相关函数指针
+static int (*real_pthread_mutex_lock)(pthread_mutex_t *) = NULL;
+static int (*real_pthread_mutex_trylock)(pthread_mutex_t *) = NULL;
+static int (*real_pthread_mutex_unlock)(pthread_mutex_t *) = NULL;
+
+// Mutex hook 控制：只 hook BIRD 协议相关的 mutex，避免 hook 内部控制用的 mutex
+static __thread int in_mutex_hook = 0;  // 防止递归 hook
 
 void generate_request_id(char* id_buf); // Function prototype for generate_request_id
 
@@ -411,11 +420,17 @@ static void lib_init(void) {
     real_write = dlsym(RTLD_NEXT, "write");
     real_fcntl = dlsym(RTLD_NEXT, "fcntl");
     real_clock_gettime = dlsym(RTLD_NEXT, "clock_gettime");
+    
+    // Mutex hook 函数指针
+    real_pthread_mutex_lock = dlsym(RTLD_NEXT, "pthread_mutex_lock");
+    real_pthread_mutex_trylock = dlsym(RTLD_NEXT, "pthread_mutex_trylock");
+    real_pthread_mutex_unlock = dlsym(RTLD_NEXT, "pthread_mutex_unlock");
 
     if (!real_socket || !real_connect || !real_send || !real_recv || !real_close ||
         !real_bind || !real_listen || !real_accept || !real_unlink || !real_select || 
         !real_poll || !real_sleep || !real_read || !real_write || !real_fcntl ||
-        !real_clock_gettime) {
+        !real_clock_gettime || !real_pthread_mutex_lock || !real_pthread_mutex_trylock ||
+        !real_pthread_mutex_unlock) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Error in dlsym: %s\n", dlerror());
         fflush(stderr);
         _exit(1);
@@ -2512,4 +2527,240 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
     
     // 3. 其他时钟类型使用真实时间
     return real_clock_gettime(clk_id, tp);
+}
+
+// === Mutex Hook 实现 ===
+
+// 等待 DESD 的 MUTEX_RESUME 消息
+static int wait_for_desd_mutex_resume(uintptr_t mutex_addr) {
+    ThreadState *state = get_thread_state();
+    if (!state || state->desd_socket_fd < 0) {
+        fprintf(stderr, "[LIBDESHOOK-MUTEX ERROR] R%d wait_for_desd_mutex_resume: thread not registered\n",
+                my_router_id);
+        return -1;
+    }
+    
+    printf("[LIBDESHOOK-MUTEX] R%d T%d waiting for MUTEX_RESUME on mutex 0x%lx...\n",
+           my_router_id, state->thread_id, (unsigned long)mutex_addr);
+    fflush(stdout);
+    
+    // 阻塞等待 DESD 的 MUTEX_RESUME 消息
+    while (1) {
+        Message resp;
+        int read_result = read_one_desd_response(state, &resp);
+        
+        if (read_result != 1) {
+            fprintf(stderr, "[LIBDESHOOK-MUTEX ERROR] R%d T%d failed to receive MUTEX_RESUME\n",
+                    my_router_id, state->thread_id);
+            return -1;
+        }
+        
+        // 检查是否是 MUTEX_RETRY_EVENT 响应
+        if (resp.event_type == MUTEX_RETRY_EVENT) {
+            // 解析响应确认是我们等待的 mutex
+            json_error_t error;
+            json_t *payload_obj = json_loads(resp.payload.json_str, 0, &error);
+            if (payload_obj) {
+                const char *status = json_string_value(json_object_get(payload_obj, "status"));
+                if (status && strcmp(status, "MUTEX_RESUME") == 0) {
+                    printf("[LIBDESHOOK-MUTEX] R%d T%d received MUTEX_RESUME for mutex 0x%lx\n",
+                           my_router_id, state->thread_id, (unsigned long)mutex_addr);
+                    fflush(stdout);
+                    json_decref(payload_obj);
+                    return 0;  // 成功收到 MUTEX_RESUME
+                }
+                json_decref(payload_obj);
+            }
+        }
+        
+        // 收到其他消息，可能是陈旧的响应，丢弃并继续等待
+        printf("[LIBDESHOOK-MUTEX] R%d T%d discarding unexpected message while waiting for MUTEX_RESUME (event_type=%d)\n",
+               my_router_id, state->thread_id, resp.event_type);
+        fflush(stdout);
+    }
+}
+
+// 发送 mutex 控制消息给 DESD（单向，不等待响应）
+static int send_mutex_msg_to_desd(EventType event_type, uintptr_t mutex_addr) {
+    ThreadState *state = get_thread_state();
+    if (!state || !state->is_registered) {
+        return -1;  // 线程未注册，跳过 hook
+    }
+    
+    Message msg;
+    memset(&msg, 0, sizeof(Message));
+    msg.message_type = HOOK_TO_DESD;
+    msg.router_id = my_router_id;
+    msg.thread_id = state->thread_id;
+    msg.event_type = event_type;
+    msg.virtual_time = current_virtual_time;
+    generate_request_id(msg.request_id);
+    
+    // 构造 payload
+    json_t *payload_obj = json_object();
+    json_object_set_new(payload_obj, "mutex_addr", json_integer((json_int_t)mutex_addr));
+    json_object_set_new(payload_obj, "request_id", json_string(msg.request_id));
+    char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
+    strncpy(msg.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
+    msg.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+    free(payload_str);
+    json_decref(payload_obj);
+    
+    // 发送消息（不等待响应）
+    char *json_str = message_to_json(&msg);
+    if (!json_str) {
+        return -1;
+    }
+    
+    size_t json_len = strlen(json_str);
+    char *json_with_newline = (char*)malloc(json_len + 2);
+    if (!json_with_newline) {
+        free(json_str);
+        return -1;
+    }
+    strcpy(json_with_newline, json_str);
+    json_with_newline[json_len] = '\n';
+    json_with_newline[json_len + 1] = '\0';
+    free(json_str);
+    
+    ssize_t sent = real_send(state->desd_socket_fd, json_with_newline, strlen(json_with_newline), 0);
+    free(json_with_newline);
+    
+    return (sent > 0) ? 0 : -1;
+}
+
+// pthread_mutex_lock hook
+int pthread_mutex_lock(pthread_mutex_t *mutex) {
+    // 防止递归 hook（例如在 hook 内部调用了需要加锁的函数）
+    if (in_mutex_hook) {
+        return real_pthread_mutex_lock(mutex);
+    }
+
+    // 检查是否是我们内部使用的 mutex（request_counter_mutex, socket_fds_mutex 等）
+    // 这些 mutex 不应该被 hook
+    if (mutex == &request_counter_mutex || mutex == &socket_fds_mutex || mutex == &thread_id_mutex) {
+        return real_pthread_mutex_lock(mutex);
+    }
+
+    // 检查线程是否已注册到 DESD
+    ThreadState *state = get_thread_state();
+    if (!state || !state->is_registered) {
+        // 线程未注册，直接使用原始函数
+        return real_pthread_mutex_lock(mutex);
+    }
+
+    in_mutex_hook = 1;
+
+    uintptr_t mutex_addr = (uintptr_t)mutex;
+
+    // 1. 先尝试非阻塞加锁（无竞争的快速路径）
+    int result = real_pthread_mutex_trylock(mutex);
+
+    if (result == 0) {
+        // 加锁成功：可选调试日志
+        // send_mutex_msg_to_desd(MUTEX_LOCK_ACQUIRED, mutex_addr);
+        printf("[LIBDESHOOK-MUTEX] R%d T%d acquired mutex 0x%lx (no contention)\n",
+               my_router_id, state->thread_id, (unsigned long)mutex_addr);
+        fflush(stdout);
+        in_mutex_hook = 0;
+        return 0;
+    }
+
+    if (result != EBUSY) {
+        // 其他错误，直接返回
+        in_mutex_hook = 0;
+        return result;
+    }
+
+    // 2. EBUSY：锁被占用，需要等待
+    // 关键点：**绝不**再退回到内核级阻塞锁，否则 DESD 会失去对该线程的控制，导致死锁
+    while (1) {
+        printf("[LIBDESHOOK-MUTEX] R%d T%d mutex 0x%lx is busy, notifying DESD...\n",
+               my_router_id, state->thread_id, (unsigned long)mutex_addr);
+        fflush(stdout);
+
+        // 2.1 通知 DESD：开始等待此 mutex
+        if (send_mutex_msg_to_desd(MUTEX_WAIT_START, mutex_addr) < 0) {
+            // 发送失败，只能降级到真实的 pthread_mutex_lock
+            fprintf(stderr, "[LIBDESHOOK-MUTEX ERROR] R%d T%d failed to send MUTEX_WAIT_START, falling back to real lock\n",
+                    my_router_id, state->thread_id);
+            fflush(stderr);
+            in_mutex_hook = 0;
+            return real_pthread_mutex_lock(mutex);
+        }
+
+        // 2.2 阻塞等待 DESD 通过 MUTEX_RESUME 唤醒
+        if (wait_for_desd_mutex_resume(mutex_addr) < 0) {
+            // 等待失败，也只能降级
+            fprintf(stderr, "[LIBDESHOOK-MUTEX ERROR] R%d T%d wait_for_desd_mutex_resume failed, falling back to real lock\n",
+                    my_router_id, state->thread_id);
+            fflush(stderr);
+            in_mutex_hook = 0;
+            return real_pthread_mutex_lock(mutex);
+        }
+
+        // 2.3 被 DESD 唤醒后，尝试一次非阻塞加锁
+        result = real_pthread_mutex_trylock(mutex);
+
+        if (result == 0) {
+            printf("[LIBDESHOOK-MUTEX] R%d T%d acquired mutex 0x%lx after DESD resume\n",
+                   my_router_id, state->thread_id, (unsigned long)mutex_addr);
+            fflush(stdout);
+            in_mutex_hook = 0;
+            return 0;
+        }
+
+        if (result != EBUSY) {
+            // 其它错误，直接返回
+            in_mutex_hook = 0;
+            return result;
+        }
+
+        // 2.4 仍然是 EBUSY：说明在我们被唤醒到真正执行 trylock 期间，
+        // 锁又被别的线程抢走了。为了保持模拟的确定性，不在这里自旋或退回内核锁，
+        // 而是重新通知 DESD 再次进入“等待-唤醒”循环。
+        printf("[LIBDESHOOK-MUTEX] R%d T%d mutex 0x%lx still busy after MUTEX_RESUME, re-entering wait loop...\n",
+               my_router_id, state->thread_id, (unsigned long)mutex_addr);
+        fflush(stdout);
+
+        // 回到 while(1) 顶部，再次发送 MUTEX_WAIT_START 并等待下一次 MUTEX_RESUME
+    }
+}
+
+// pthread_mutex_unlock hook
+int pthread_mutex_unlock(pthread_mutex_t *mutex) {
+    // 防止递归 hook
+    if (in_mutex_hook) {
+        return real_pthread_mutex_unlock(mutex);
+    }
+    
+    // 检查是否是内部 mutex
+    if (mutex == &request_counter_mutex || mutex == &socket_fds_mutex || mutex == &thread_id_mutex) {
+        return real_pthread_mutex_unlock(mutex);
+    }
+    
+    // 检查线程是否已注册到 DESD
+    ThreadState *state = get_thread_state();
+    if (!state || !state->is_registered) {
+        return real_pthread_mutex_unlock(mutex);
+    }
+    
+    in_mutex_hook = 1;
+    
+    uintptr_t mutex_addr = (uintptr_t)mutex;
+    
+    // 1. 先执行真正的解锁
+    int result = real_pthread_mutex_unlock(mutex);
+    
+    if (result == 0) {
+        // 2. 解锁成功，通知 DESD
+        printf("[LIBDESHOOK-MUTEX] R%d T%d released mutex 0x%lx, notifying DESD...\n",
+               my_router_id, state->thread_id, (unsigned long)mutex_addr);
+        fflush(stdout);
+        
+        send_mutex_msg_to_desd(MUTEX_UNLOCK, mutex_addr);
+    }
+    
+    in_mutex_hook = 0;
+    return result;
 }
