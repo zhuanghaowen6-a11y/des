@@ -2045,7 +2045,7 @@ void desd_event_loop() {
             status_after_event == RUNNING
         );
 
-        int should_wait_for_router = !is_cancel_event && !is_getvt_event && (
+        int should_wait_for_router = !is_cancel_event && (
             (status_before_event == BLOCKED && status_after_event == RUNNING) || // 路由器解除阻塞
             is_initial_start ||                                                 // 首次 ROUTER_START: IDLE -> RUNNING
             (is_router_initiated_event && status_after_event == RUNNING)        // 处理了路由器主动发起的事件
