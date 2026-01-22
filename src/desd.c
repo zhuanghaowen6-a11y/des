@@ -1974,10 +1974,10 @@ void desd_event_loop() {
             continue;
         }
 
-        // 调试限制：达到 10,000 个事件后停止
-        if (current_event.event_id >= 10000) {
-            printf("[DESD-STOP] Reached 10,000 events limit (EventID: %lu). Stopping simulation.\n", current_event.event_id);
-            printf("[DESD-EXIT] Reason: Event limit reached (10,000). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
+        // 调试限制：达到 30,000 个事件后停止
+        if (current_event.event_id >= 30000) {
+            printf("[DESD-STOP] Reached 30,000 events limit (EventID: %lu). Stopping simulation.\n", current_event.event_id);
+            printf("[DESD-EXIT] Reason: Event limit reached (30,000). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
                    current_virtual_time, heartbeat_event_counter);
             exit(0);
         }

@@ -247,7 +247,14 @@ DESD_PID=$!
 echo $DESD_PID > /tmp/desd.pid
 log_info "desd已启动，PID: $DESD_PID，等待 $NUM_ROUTERS 个路由器"
 
-sleep 3
+# 等待 desd socket 创建，最多等待 10 秒
+for attempt in $(seq 1 20); do
+    if [ -S /tmp/desd_control_socket ]; then
+        log_info "desd socket 已创建 (尝试 $attempt/20)"
+        break
+    fi
+    sleep 0.5
+done
 
 if ! ps -p $DESD_PID > /dev/null; then
     log_error "desd启动失败！查看日志："
