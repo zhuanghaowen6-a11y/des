@@ -1376,8 +1376,29 @@ void drain_all_messages_nonblocking() {
                     printf("[DESD-DRAIN] R%d T%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), marked BLOCKED, queued at VT=%.3f.\n",
                            router_id, thread_id, msg.request_id, current_virtual_time);
                     
-                } else if (msg.event_type == ROUTER_BLOCK_REQUEST ||
-                           msg.event_type == PACKET_SEND_EVENT ||
+                } else if (msg.event_type == ROUTER_BLOCK_REQUEST) {
+                    // ===== ROUTER_BLOCK_REQUEST 特殊处理：只入队，不改 status =====
+                    // 原因：handle_router_block_request 会根据是否有 ready fd/pending packet 等
+                    // 决定是"立即唤醒"（status 保持 RUNNING）还是"真正阻塞"（status 改为 BLOCKED）。
+                    // 如果在 drain 阶段预先标记为 BLOCKED，会导致"立即唤醒"的 BLOCK 被视为
+                    // BLOCKED->RUNNING 转换，从而错误地触发 interact_with_router_until_it_blocks。
+                    Event block_event = {
+                        .timestamp = current_virtual_time,
+                        .router_id = router_id,
+                        .thread_id = thread_id,
+                        .event_type = msg.event_type,
+                        .event_id = generate_event_id(),
+                        .payload = msg.payload
+                    };
+                    push_event(block_event);
+                    
+                    const char* status_desc = (thread_status == RUNNING_DETACHED) ? "was DETACHED" : 
+                                             (thread_status == RUNNING) ? "was RUNNING" :
+                                             (thread_status == IDLE) ? "was IDLE" : "unknown status";
+                    printf("[DESD-DRAIN] R%d T%d (%s) sent ROUTER_BLOCK_REQUEST (ReqID: %s), queued at VT=%.3f (EventID: %lu). Status NOT changed.\n",
+                           router_id, thread_id, status_desc, msg.request_id, current_virtual_time, block_event.event_id);
+                    
+                } else if (msg.event_type == PACKET_SEND_EVENT ||
                            msg.event_type == CONNECT_REQUEST_EVENT ||
                            thread_status == RUNNING_DETACHED) {
                     // 阻塞类请求（包括来自 RUNNING_DETACHED 线程的"重新 hook"请求）
@@ -1683,7 +1704,28 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
                 }
             }
             
-            // 阻塞类请求（ROUTER_BLOCK_REQUEST, PACKET_SEND, CONNECT_REQUEST 等）
+            // ===== ROUTER_BLOCK_REQUEST 特殊处理：只入队，不改 status =====
+            // 原因：handle_router_block_request 会根据是否有 ready fd/pending packet 等
+            // 决定是"立即唤醒"（status 保持 RUNNING）还是"真正阻塞"（status 改为 BLOCKED）。
+            if (msg.event_type == ROUTER_BLOCK_REQUEST) {
+                Event block_event = {
+                    .timestamp = current_virtual_time,
+                    .router_id = router_id,
+                    .thread_id = thread_id,
+                    .event_type = msg.event_type,
+                    .event_id = generate_event_id(),
+                    .payload = msg.payload
+                };
+                push_event(block_event);
+                
+                printf("[DESD-INTERACT] R%d T%d sent ROUTER_BLOCK_REQUEST (ReqID: %s), queued at VT=%.3f (EventID: %lu). Status NOT changed. Returning to main loop.\n",
+                       router_id, thread_id, msg.request_id, current_virtual_time, block_event.event_id);
+                
+                // 返回主循环处理入队的事件
+                return;
+            }
+            
+            // 其他阻塞类请求（PACKET_SEND, CONNECT_REQUEST 等）
             double event_timestamp = current_virtual_time;
             if (msg.event_type == PACKET_SEND_EVENT) {
                 event_timestamp = current_virtual_time + 0.002;
@@ -2019,10 +2061,14 @@ void desd_event_loop() {
         //    之后线程可能长时间只在应用侧执行 CPU/mutex 操作，而不再立即发起新的 DES 事件
         // 3. 如果此时进入 interact 并持续等待该线程的消息，而线程只发送 MUTEX_LOCK/UNLOCK 等瞬时事件，
         //    会导致 DESD 长时间停留在 interact 阶段，其他路由器事件得不到调度
+        // 注意：ROUTER_BLOCK_REQUEST 不再包含在 is_router_initiated_event 中
+        // 原因：ROUTER_BLOCK_REQUEST 可能"立即唤醒"（有 ready fd/pending packet），
+        // 此时 status 保持 RUNNING，如果触发 interact，而线程不再发 RPC，会导致死锁。
+        // handle_router_block_request 会在"真正阻塞"时将 status 改为 BLOCKED，
+        // 之后由其他事件（如 PACKET_RECEIVE/TIMEOUT）触发 BLOCKED->RUNNING 转换来进入 interact。
         int is_router_initiated_event = (
             current_event.event_type == PACKET_SEND_EVENT ||
-            current_event.event_type == CONNECT_REQUEST_EVENT ||
-            current_event.event_type == ROUTER_BLOCK_REQUEST
+            current_event.event_type == CONNECT_REQUEST_EVENT
         );
 
         int is_getvt_event = (current_event.event_type == GET_VIRTUAL_TIME_EVENT);
@@ -3151,7 +3197,11 @@ void handle_router_block_request(Event event) {
             if (found_buffer_index >= 0) {
                 // 找到了匹配socket_fd的数据，立即唤醒
                 router_states[router_id].pending_packets_count--;
-                ti->status = RUNNING;
+                // 只有当线程确实被这个 BLOCK_REQUEST 阻塞时才改 status
+                if (ti->status == BLOCKED && strcmp(ti->blocked_on_request_id, request_id_local) == 0) {
+                    ti->status = RUNNING;
+                    ti->blocked_on_request_id[0] = '\0';
+                }
                 
                 // 从队列中移除找到的buffer（压缩队列）
                 int head = router_states[router_id].pending_buffer_head;
@@ -3228,7 +3278,11 @@ void handle_router_block_request(Event event) {
                 
                 if (peer_has_closed) {
                     // 对端已关闭且无数据，返回EOF（0字节）
-                    ti->status = RUNNING;
+                    // 只有当线程确实被这个 BLOCK_REQUEST 阻塞时才改 status
+                    if (ti->status == BLOCKED && strcmp(ti->blocked_on_request_id, request_id_local) == 0) {
+                        ti->status = RUNNING;
+                        ti->blocked_on_request_id[0] = '\0';
+                    }
                     
                     json_t *resp_payload = json_object();
                     json_object_set_new(resp_payload, "status", json_string("EOF"));
@@ -3256,7 +3310,11 @@ void handle_router_block_request(Event event) {
                            router_id, socket_fd);
                 } else if (is_nonblocking) {
                     // 非阻塞模式：立即返回 EAGAIN
-                    ti->status = RUNNING;
+                    // 只有当线程确实被这个 BLOCK_REQUEST 阻塞时才改 status
+                    if (ti->status == BLOCKED && strcmp(ti->blocked_on_request_id, request_id_local) == 0) {
+                        ti->status = RUNNING;
+                        ti->blocked_on_request_id[0] = '\0';
+                    }
                     send_eagain_response(router_id, thread_id, request_id_local);
                     printf("[DESD] R%d recv() on non-blocking socket, no data available, returning EAGAIN.\n", router_id);
                 } else {
@@ -3281,7 +3339,11 @@ void handle_router_block_request(Event event) {
                 router_states[router_id].pending_conn_head = (head + 1) % MAX_PENDING_PACKETS;
                 router_states[router_id].pending_connections_count--;
                 
-                ti->status = RUNNING;
+                // 只有当线程确实被这个 BLOCK_REQUEST 阻塞时才改 status
+                if (ti->status == BLOCKED && strcmp(ti->blocked_on_request_id, request_id_local) == 0) {
+                    ti->status = RUNNING;
+                    ti->blocked_on_request_id[0] = '\0';
+                }
                 
                 // 在响应中返回connection_id和client信息
                 Message accept_resp;
@@ -3486,7 +3548,11 @@ void handle_router_block_request(Event event) {
             
             // 如果有就绪的 FD，立即唤醒
             if (has_ready_fds) {
-                ti->status = RUNNING;
+                // 只有当线程确实被这个 BLOCK_REQUEST 阻塞时才改 status
+                if (ti->status == BLOCKED && strcmp(ti->blocked_on_request_id, request_id_local) == 0) {
+                    ti->status = RUNNING;
+                    ti->blocked_on_request_id[0] = '\0';
+                }
                 // 清除保存的monitored_fds信息（因为已经返回，不再需要）
                 ti->monitored_fds_count = 0;
                 
@@ -3518,7 +3584,11 @@ void handle_router_block_request(Event event) {
             } else if (timeout_ms == 0) {
                 // 特殊处理：timeout=0 且无数据就绪，立即返回超时
                 json_decref(ready_fds_array);
-                ti->status = RUNNING;
+                // 只有当线程确实被这个 BLOCK_REQUEST 阻塞时才改 status
+                if (ti->status == BLOCKED && strcmp(ti->blocked_on_request_id, request_id_local) == 0) {
+                    ti->status = RUNNING;
+                    ti->blocked_on_request_id[0] = '\0';
+                }
                 send_timeout_response(router_id, thread_id, request_id_local, "SELECT_CALL");
                 printf("[DESD] R%d select/poll() immediate timeout (timeout=0).\n", router_id);
             } else {
