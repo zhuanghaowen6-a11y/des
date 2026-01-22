@@ -36,7 +36,7 @@ typedef struct {
 EventOwnerInfo event_owner_info[MAX_ACTIVE_EVENTS];
 
 // Router States
-#define MAX_ROUTERS 20 // Support up to 20 routers
+#define MAX_ROUTERS 200 // Support up to 200 routers
 #define MAX_CONNECTIONS_PER_ROUTER 200 // 每个路由器最多支持的连接数
 
 // 连接信息结构
@@ -591,8 +591,6 @@ int main(int argc, char *argv[]) {
     }
     printf("[DESD] Starting daemon, expecting %d router(s) to connect.\n", expected_routers);
     
-    init_desd();
-
     // Setup control socket for initial connections
     if (access(DESD_CONTROL_SOCKET_PATH, F_OK) == 0) {
         unlink(DESD_CONTROL_SOCKET_PATH);
@@ -613,13 +611,16 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[DESD-EXIT] Reason: Failed to bind control socket. Code=1\n");
         exit(1);
     }
-    if (listen(desd_listen_fd, 5) < 0) {
+    if (listen(desd_listen_fd, expected_routers) < 0) {
         perror("[DESD ERROR] listen for connections");
         close(desd_listen_fd);
         fprintf(stderr, "[DESD-EXIT] Reason: Failed to listen on control socket. Code=1\n");
         exit(1);
     }
     printf("[DESD] Listening for initial libdeshook.so connections on %s\n", DESD_CONTROL_SOCKET_PATH);
+
+    // 初始化 DESD 内部状态（router_states 等）
+    init_desd();
 
     // Accept initial router connections and process REGISTER_ROUTER
     int connected_routers = 0;

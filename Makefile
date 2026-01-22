@@ -49,7 +49,7 @@ full: all bird-tests poll-tests tcp-tests timeout-tests multi-tests
 
 $(DESD): $(DESD_SRC) $(COMMON_SRC) $(COMMON_H)
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(DESD_SRC) $(COMMON_SRC) -o $(DESD) $(LDFLAGS)
+	$(CC) $(CFLAGS) -mcmodel=medium $(DESD_SRC) $(COMMON_SRC) -o $(DESD) $(LDFLAGS)
 	@echo "✓ Built desd"
 
 $(LIBDESHOOK): $(LIBDESHOOK_SRC) $(COMMON_SRC) $(COMMON_H)
