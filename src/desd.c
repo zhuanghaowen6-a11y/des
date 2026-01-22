@@ -2020,7 +2020,7 @@ void desd_event_loop() {
         // 调试限制：达到 30,000 个事件后停止
         if (current_event.event_id >= 30000) {
             printf("[DESD-STOP] Reached 30,000 events limit (EventID: %lu). Stopping simulation.\n", current_event.event_id);
-            printf("[DESD-EXIT] Reason: Event limit reached (30,000). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
+            printf("[DESD-EXIT] Reason: Event limit reached (100,000). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
                    current_virtual_time, heartbeat_event_counter);
             exit(0);
         }
@@ -4497,14 +4497,14 @@ static MutexInfo* find_or_create_mutex(uintptr_t mutex_addr) {
             mutex_table[i].mutex_addr = mutex_addr;
             mutex_table[i].is_active = 1;
             mutex_table_count++;
-            printf("[DESD-MUTEX] Created new mutex entry for addr=0x%lx (total tracked: %d)\n",
-                   (unsigned long)mutex_addr, mutex_table_count);
+            // printf("[DESD-MUTEX] Created new mutex entry for addr=0x%lx (total tracked: %d)\n",
+            //        (unsigned long)mutex_addr, mutex_table_count);
             return &mutex_table[i];
         }
     }
     
-    fprintf(stderr, "[DESD-MUTEX ERROR] Mutex table full! Cannot track mutex 0x%lx\n",
-            (unsigned long)mutex_addr);
+    // fprintf(stderr, "[DESD-MUTEX ERROR] Mutex table full! Cannot track mutex 0x%lx\n",
+    //         (unsigned long)mutex_addr);
     return NULL;
 }
 
@@ -4516,8 +4516,8 @@ static void handle_mutex_lock_acquired(int router_id, int thread_id, uintptr_t m
     mi->owner_router_id = router_id;
     mi->owner_thread_id = thread_id;
     
-    printf("[DESD-MUTEX] R%d T%d acquired mutex 0x%lx\n",
-           router_id, thread_id, (unsigned long)mutex_addr);
+    // printf("[DESD-MUTEX] R%d T%d acquired mutex 0x%lx\n",
+    //        router_id, thread_id, (unsigned long)mutex_addr);
 }
 
 // 处理 MUTEX_WAIT_START：线程尝试加锁失败，进入等待状态
@@ -4527,8 +4527,8 @@ static void handle_mutex_wait_start(int router_id, int thread_id, uintptr_t mute
     
     // 将线程加入等待队列
     if (mi->waiter_count >= MAX_MUTEX_WAITERS) {
-        fprintf(stderr, "[DESD-MUTEX ERROR] Waiter queue full for mutex 0x%lx\n",
-                (unsigned long)mutex_addr);
+        // fprintf(stderr, "[DESD-MUTEX ERROR] Waiter queue full for mutex 0x%lx\n",
+        //         (unsigned long)mutex_addr);
         return;
     }
     
@@ -4547,9 +4547,9 @@ static void handle_mutex_wait_start(int router_id, int thread_id, uintptr_t mute
     }
     pthread_mutex_unlock(&router_states_mutex);
     
-    printf("[DESD-MUTEX] R%d T%d waiting on mutex 0x%lx (owner: R%d T%d, waiters: %d)\n",
-           router_id, thread_id, (unsigned long)mutex_addr,
-           mi->owner_router_id, mi->owner_thread_id, mi->waiter_count);
+    // printf("[DESD-MUTEX] R%d T%d waiting on mutex 0x%lx (owner: R%d T%d, waiters: %d)\n",
+    //        router_id, thread_id, (unsigned long)mutex_addr,
+    //        mi->owner_router_id, mi->owner_thread_id, mi->waiter_count);
 }
 
 // 处理 MUTEX_UNLOCK：线程释放 mutex
@@ -4561,8 +4561,8 @@ static void handle_mutex_unlock_msg(int router_id, int thread_id, uintptr_t mute
     mi->owner_router_id = 0;
     mi->owner_thread_id = 0;
     
-    printf("[DESD-MUTEX] R%d T%d released mutex 0x%lx (waiters: %d)\n",
-           router_id, thread_id, (unsigned long)mutex_addr, mi->waiter_count);
+    // printf("[DESD-MUTEX] R%d T%d released mutex 0x%lx (waiters: %d)\n",
+    //        router_id, thread_id, (unsigned long)mutex_addr, mi->waiter_count);
 
     // 如果没有等待者，可以回收该 mutex 表项，避免长时间占用 slot
     if (mi->waiter_count == 0) {
@@ -4608,9 +4608,9 @@ static void handle_mutex_unlock_msg(int router_id, int thread_id, uintptr_t mute
         
         push_event(retry_event);
         
-        printf("[DESD-MUTEX] Generated MUTEX_RETRY_EVENT for R%d T%d on mutex 0x%lx at VT=%.3f (EventID: %lu)\n",
-               waiter_router, waiter_thread, (unsigned long)mutex_addr,
-               current_virtual_time, retry_event.event_id);
+        // printf("[DESD-MUTEX] Generated MUTEX_RETRY_EVENT for R%d T%d on mutex 0x%lx at VT=%.3f (EventID: %lu)\n",
+        //        waiter_router, waiter_thread, (unsigned long)mutex_addr,
+        //        current_virtual_time, retry_event.event_id);
     }
 }
 
@@ -4631,8 +4631,8 @@ void handle_mutex_retry_event(Event event) {
         json_decref(payload_obj);
     }
     
-    printf("[DESD-MUTEX] Processing MUTEX_RETRY_EVENT for R%d T%d on mutex 0x%lx at VT=%.3f\n",
-           router_id, thread_id, (unsigned long)mutex_addr, current_virtual_time);
+    // printf("[DESD-MUTEX] Processing MUTEX_RETRY_EVENT for R%d T%d on mutex 0x%lx at VT=%.3f\n",
+    //        router_id, thread_id, (unsigned long)mutex_addr, current_virtual_time);
     
     // 更新线程状态为 RUNNING
     pthread_mutex_lock(&router_states_mutex);
@@ -4664,6 +4664,6 @@ void handle_mutex_retry_event(Event event) {
     
     send_message_to_thread(router_id, thread_id, &response);
     
-    printf("[DESD-MUTEX] Sent MUTEX_RESUME to R%d T%d for mutex 0x%lx\n",
-           router_id, thread_id, (unsigned long)mutex_addr);
+    // printf("[DESD-MUTEX] Sent MUTEX_RESUME to R%d T%d for mutex 0x%lx\n",
+    //        router_id, thread_id, (unsigned long)mutex_addr);
 }
