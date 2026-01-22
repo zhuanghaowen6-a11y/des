@@ -302,54 +302,6 @@ fi
 # 等待所有启动命令完成
 wait
 
-log_info "等待BIRD进程初始化..."
-sleep 5
-
-log_step "步骤9: 验证BIRD进程"
-ALL_RUNNING=1
-mkdir -p logs/container_bird_logs 2>/dev/null || true
-for i in $(seq 1 $NUM_ROUTERS); do
-    BIRD_PID=$(sudo docker exec r$i pidof bird 2>/dev/null || echo "")
-    if [ -n "$BIRD_PID" ]; then
-        log_info "✓ R$i的BIRD已启动，PID: $BIRD_PID"
-    else
-        log_error "R$i的BIRD启动失败，收集容器日志"
-        sudo docker cp r$i:/var/log/bird_r${i}.log logs/container_bird_logs/ 2>/dev/null || true
-        sudo docker exec r$i cat /var/log/bird_r${i}.log 2>/dev/null || true
-        ALL_RUNNING=0
-    fi
-done
-
-if [ $ALL_RUNNING -eq 0 ]; then
-    log_error "部分BIRD进程启动失败（已保留环境用于调试），不退出，继续观察并收集更多信息"
-fi
-
-log_step "步骤10: 运行测试 (${TEST_DURATION}秒)"
-log_info "等待BGP会话建立..."
-
-CHECKS=$((TEST_DURATION / 10))
-mkdir -p logs/container_bird_logs 2>/dev/null || true
-for i in $(seq 1 $CHECKS); do
-    sleep 10
-    
-    # 检查desd是否仍在运行
-    if ! ps -p $DESD_PID > /dev/null; then
-        log_error "desd进程已退出！"
-        break
-    fi
-    
-    RUNNING_COUNT=0
-    for j in $(seq 1 $NUM_ROUTERS); do
-        if sudo docker exec r$j pidof bird > /dev/null 2>&1; then
-            RUNNING_COUNT=$((RUNNING_COUNT + 1))
-        fi
-        sudo docker cp r$j:/var/log/bird_r${j}.log logs/container_bird_logs/bird_r${j}.log.iter${i} 2>/dev/null || true
-    done
-    
-    VT=$(grep "responding with VT" logs/desd_n${NUM_ROUTERS}.log 2>/dev/null | tail -1 | grep -oP 'VT=\K[0-9.]+' || echo "N/A")
-    echo "[$((i*10))s/${TEST_DURATION}s] DESD: running, BIRD: $RUNNING_COUNT/$NUM_ROUTERS, VT: ${VT}s"
-done
-
 log_step "步骤11: 收集最终日志"
 echo ""
 
