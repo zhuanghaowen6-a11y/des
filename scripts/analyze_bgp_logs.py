@@ -78,9 +78,22 @@ def analyze_desd_log(log_path):
         return False, f"DESD 异常退出 (code={exit_code}): {reason}", final_vt, processed_events
 
 
+# Flap 阈值：超过此次数的 close/down 视为抖动严重
+FLAP_THRESHOLD = 3
+
 def analyze_bird_log(log_path, router_id, expected_peers):
     """
     分析单个 BIRD 日志，检查 BGP 会话状态。
+    
+    采用两段式逻辑：
+    1. 第一段：收集每个 peer 的状态时间线
+    2. 第二段：根据最终状态判定会话健康性
+    
+    判定规则：
+    - 规则1：从未建立 → never_established
+    - 规则2：曾经建立，最终状态是 up/established → healthy（不计入 closed）
+    - 规则3：曾经建立，最终状态是 closed/down → 异常断开
+    - 规则4：flap 次数过多（>= FLAP_THRESHOLD）→ 给 warning
     
     参数:
         log_path: 日志文件路径
@@ -89,9 +102,10 @@ def analyze_bird_log(log_path, router_id, expected_peers):
     
     返回:
         {
-            'established': set(),  # 成功建立的会话
-            'closed': set(),       # 被关闭的会话（协议层主动断开）
+            'established': set(),  # 最终状态为 up/established 的会话
+            'closed': set(),       # 最终状态为 closed/down 的会话（真正异常断开）
             'never_established': set(),  # 从未建立的会话
+            'flapping': dict(),    # 抖动严重的会话 {peer: close_count}
             'desd_disconnect_line': int or None,  # DESD 断开的行号
             'errors': []           # 其他错误信息
         }
@@ -100,6 +114,7 @@ def analyze_bird_log(log_path, router_id, expected_peers):
         'established': set(),
         'closed': set(),
         'never_established': set(expected_peers),
+        'flapping': {},  # {peer: close_count}
         'desd_disconnect_line': None,
         'errors': []
     }
@@ -126,24 +141,20 @@ def analyze_bird_log(log_path, router_id, expected_peers):
     # 跟踪每个 peer 的状态变化
     peer_states = defaultdict(list)  # peer -> [(line_num, state)]
     
+    # ========== 第一段：收集状态时间线 ==========
     for i, line in enumerate(lines[:analyze_until]):
         # BGP session established
         match = re.search(r'<TRACE> (r\d+): BGP session established', line)
         if match:
             peer = match.group(1)
             peer_states[peer].append((i, 'established'))
-            result['established'].add(peer)
-            result['never_established'].discard(peer)
             continue
         
         # State changed to up
         match = re.search(r'<TRACE> (r\d+): State changed to up', line)
         if match:
             peer = match.group(1)
-            if peer not in result['established']:
-                peer_states[peer].append((i, 'up'))
-                result['established'].add(peer)
-                result['never_established'].discard(peer)
+            peer_states[peer].append((i, 'up'))
             continue
         
         # BGP session closed (协议层主动断开)
@@ -151,17 +162,13 @@ def analyze_bird_log(log_path, router_id, expected_peers):
         if match:
             peer = match.group(1)
             peer_states[peer].append((i, 'closed'))
-            result['closed'].add(peer)
             continue
         
         # State changed to down (协议层降级)
         match = re.search(r'<TRACE> (r\d+): State changed to down', line)
         if match:
             peer = match.group(1)
-            # 只有在之前是 established/up 的情况下才算 closed
-            if peer in result['established']:
-                peer_states[peer].append((i, 'down'))
-                result['closed'].add(peer)
+            peer_states[peer].append((i, 'down'))
             continue
         
         # 其他可能的断开信号
@@ -169,9 +176,46 @@ def analyze_bird_log(log_path, router_id, expected_peers):
             match = re.search(r'<TRACE> (r\d+):', line)
             if match:
                 peer = match.group(1)
-                if peer in result['established']:
-                    peer_states[peer].append((i, 'connection_error'))
-                    result['closed'].add(peer)
+                peer_states[peer].append((i, 'connection_error'))
+    
+    # ========== 第二段：根据时间线判定最终状态 ==========
+    for peer in expected_peers:
+        states = peer_states.get(peer, [])
+        
+        if not states:
+            # 规则1：从未有任何状态记录 → never_established
+            # (已经在初始化时加入 never_established)
+            continue
+        
+        # 按行号排序（虽然理论上已经是顺序的）
+        states.sort(key=lambda x: x[0])
+        
+        # 统计
+        ever_established = any(s[1] in ('established', 'up') for s in states)
+        last_state = states[-1][1]
+        close_count = sum(1 for s in states if s[1] in ('closed', 'down', 'connection_error'))
+        
+        if not ever_established:
+            # 从未成功建立过（只有 close/down 记录，无 established/up）
+            # 保持在 never_established
+            continue
+        
+        # 曾经建立过
+        result['never_established'].discard(peer)
+        
+        # 规则4：检测 flap
+        if close_count >= FLAP_THRESHOLD:
+            result['flapping'][peer] = close_count
+        
+        # 规则2 & 规则3：根据最终状态判定
+        if last_state in ('established', 'up'):
+            # 规则2：最终状态是 up/established → healthy
+            result['established'].add(peer)
+            # 不加入 closed，即使期间有过 close
+        else:
+            # 规则3：最终状态是 closed/down/connection_error → 异常断开
+            result['established'].add(peer)  # 仍然记录曾经建立过
+            result['closed'].add(peer)
     
     return result
 
@@ -209,8 +253,10 @@ def analyze_all_logs(num_routers, log_dir):
     total_established = 0
     total_closed = 0
     total_never_established = 0
+    total_flapping = 0
     
     router_results = {}
+    flapping_warnings = []  # 用于最终汇总
     
     for router_id in range(1, num_routers + 1):
         router_name = f"r{router_id}"
@@ -260,13 +306,20 @@ def analyze_all_logs(num_routers, log_dir):
             all_pass = False
             issues.append(f"R{router_id}: 会话从未建立 - {never_list}")
         
-        # 被关闭的会话（关键！）
+        # 被关闭的会话（关键！最终状态为 down/closed 才算异常）
         if result['closed']:
             closed_list = ', '.join(sorted(result['closed']))
             print_fail(f"异常断开: {closed_list}")
             total_closed += len(result['closed'])
             all_pass = False
             issues.append(f"R{router_id}: 会话异常断开 - {closed_list}")
+        
+        # 抖动严重的会话（warning，不影响 PASS/FAIL）
+        if result['flapping']:
+            for peer, count in sorted(result['flapping'].items()):
+                print_warn(f"会话抖动: {peer} (close/down {count} 次，最终状态: {'up' if peer not in result['closed'] else 'down'})")
+                flapping_warnings.append(f"R{router_id}-{peer}: {count} 次 close/down")
+            total_flapping += len(result['flapping'])
         
         # DESD 断开信息
         if result['desd_disconnect_line']:
@@ -279,9 +332,16 @@ def analyze_all_logs(num_routers, log_dir):
     print(f"  期望会话数: {total_expected}")
     print(f"  成功建立数: {total_established}")
     print(f"  从未建立数: {total_never_established}")
-    print(f"  异常断开数: {total_closed}")
+    print(f"  异常断开数: {total_closed} (最终状态为 down)")
+    print(f"  抖动会话数: {total_flapping} (>= {FLAP_THRESHOLD} 次 close/down)")
     
     print(f"\n{Colors.BOLD}最终判定:{Colors.END}")
+    
+    # 显示 flapping warnings（不影响 PASS/FAIL）
+    if flapping_warnings:
+        print(f"\n{Colors.YELLOW}{Colors.BOLD}⚠ 会话抖动警告 (不影响测试结果):{Colors.END}")
+        for warn in flapping_warnings:
+            print(f"{Colors.YELLOW}  - {warn}{Colors.END}")
     
     if all_pass:
         print(f"\n{Colors.GREEN}{Colors.BOLD}{'='*60}{Colors.END}")
