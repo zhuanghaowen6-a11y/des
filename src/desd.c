@@ -972,6 +972,31 @@ int find_socket_fd_for_peer(int router_id, int peer_router_id, int peer_socket_f
     return -1;
 }
 
+// 调试辅助：打印指定路由器的所有活跃连接映射
+static void dump_router_connections(int router_id, const char *tag) {
+    if (router_id <= 0 || router_id > MAX_ROUTERS) {
+        return;
+    }
+
+    const char *label = tag ? tag : "NO_TAG";
+    printf("[DESD-CONN-DUMP] %s R%d BEGIN\n", label, router_id);
+
+    for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+        if (router_states[router_id].connections[i].is_active) {
+            int local_fd = router_states[router_id].connections[i].socket_fd;
+            int peer_rid = router_states[router_id].connections[i].peer_router_id;
+            int peer_fd = router_states[router_id].connections[i].peer_socket_fd;
+            unsigned long conn_id = router_states[router_id].connections[i].connection_id;
+            int peer_closed = router_states[router_id].connections[i].peer_closed;
+
+            printf("[DESD-CONN-DUMP] %s R%d idx=%d local_fd=%d peer_rid=%d peer_fd=%d conn_id=%lu peer_closed=%d\n",
+                   label, router_id, i, local_fd, peer_rid, peer_fd, conn_id, peer_closed);
+        }
+    }
+
+    printf("[DESD-CONN-DUMP] %s R%d END\n", label, router_id);
+}
+
 // --- Event Queue Management (Min-Heap Implementation) ---
 // 比较两个事件的优先级：先按 timestamp，再按 event_id（确保同时间戳事件按入队顺序处理）
 static int event_less_than(const Event* a, const Event* b) {
@@ -2852,6 +2877,11 @@ void handle_connection_info_event(Event event) {
             if (existing_entry_idx != -1) {
                 printf("[DEBUG-CONN-INFO] R%d (client) connection entry exists at index %d but no server match yet (peer_router_id=%d)\n",
                        router_id, existing_entry_idx, peer_router_id);
+                // 调试：dump 当前客户端及已知对端的连接表，便于分析未匹配原因
+                dump_router_connections(router_id, "CONN_INFO_CLIENT_BEFORE");
+                if (peer_router_id > 0 && peer_router_id <= MAX_ROUTERS) {
+                    dump_router_connections(peer_router_id, "CONN_INFO_CLIENT_PEER");
+                }
             } else {
                 // 如果没有找到已有的连接，这通常不应该发生，因为 established 事件应该先到
                 printf("[DEBUG-CONN-INFO] R%d (client) NO existing connection entry found for fd=%d. Registering new (incomplete) entry.\n",
@@ -2870,6 +2900,8 @@ void handle_connection_info_event(Event event) {
         
         printf("[DEBUG-CONN-INFO] R%d (server) sending CONNECTION_INFO for fd=%d, conn_id=%lu (looking for virtual_fd=%d)\n", 
                router_id, socket_fd, connection_id, virtual_server_fd);
+        // 调试：在查找/替换虚拟连接前先 dump 当前 server 侧连接表
+        dump_router_connections(router_id, "CONN_INFO_SERVER_BEFORE");
         
         // 首先在 server 端查找虚拟连接
         for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
@@ -2898,6 +2930,9 @@ void handle_connection_info_event(Event event) {
                             router_states[client_router_id].connections[j].peer_socket_fd = socket_fd;
                             printf("[DESD] R%d (client) peer_socket_fd updated: %d -> %d\n",
                                    client_router_id, virtual_server_fd, socket_fd);
+                            // 调试：成功更新后 dump server/client 双侧映射
+                            dump_router_connections(router_id, "CONN_INFO_SERVER_AFTER");
+                            dump_router_connections(client_router_id, "CONN_INFO_CLIENT_AFTER");
                             break;
                         }
                     }
@@ -2928,6 +2963,9 @@ void handle_connection_info_event(Event event) {
             // 尝试通过 connection_id 查找 client 端连接
             printf("[DESD WARNING] R%d (server) virtual connection not found for conn_id=%lu, virtual_fd=%d. Searching for client connection...\n",
                    router_id, connection_id, virtual_server_fd);
+
+            // 调试：dump 当前 server 侧连接表，便于后续分析
+            dump_router_connections(router_id, "CONN_INFO_SERVER_NO_VIRTUAL");
             
             for (int rid = 1; rid <= MAX_ROUTERS; rid++) {
                 if (rid == router_id || router_states[rid].thread_count == 0) continue;
@@ -2942,6 +2980,7 @@ void handle_connection_info_event(Event event) {
                         router_states[rid].connections[i].peer_socket_fd = socket_fd;
                         printf("[CONN-ID-MATCH] R%d (server) fd=%d MATCHED with R%d (client) fd=%d using conn_id=%lu\n",
                                router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
+                        dump_router_connections(rid, "CONN_INFO_CLIENT_USING_CONN_ID");
                         break;
                     }
                 }
@@ -2960,6 +2999,9 @@ void handle_connection_info_event(Event event) {
             
             printf("[DESD] R%d (server) registered NEW connection (fallback): fd %d <-> R%d (client) fd %d (conn_id=%lu).\n",
                    router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
+            if (client_router_id > 0 && client_router_id <= MAX_ROUTERS) {
+                dump_router_connections(client_router_id, "CONN_INFO_CLIENT_FALLBACK_AFTER");
+            }
         }
     }
     
@@ -3755,6 +3797,9 @@ void handle_packet_send_event(Event event) {
     if (target_router_id == -1) {
         fprintf(stderr, "[DESD ERROR] R%d: No peer found for socket fd %d. Cannot send packet.\n", 
                 source_router_id, socket_fd);
+        // 调试：在判定 Invalid connection 前 dump 源/目的路由器的连接映射
+        dump_router_connections(source_router_id, "SEND_SRC_ON_INVALID_MAP");
+        dump_router_connections(target_router_id, "SEND_DST_ON_INVALID_MAP");
         send_error_response(source_router_id, event.thread_id, request_id, "Invalid connection");
         return;
     }
@@ -3781,6 +3826,9 @@ void handle_packet_send_event(Event event) {
     if (target_socket_fd == -1) {
         fprintf(stderr, "[DESD ERROR] R%d: Cannot find socket_fd for connection from R%d (source fd=%d).\n",
                 target_router_id, source_router_id, socket_fd);
+        // 调试：Invalid connection mapping 专用 dump，方便分析双向连接表不一致
+        dump_router_connections(source_router_id, "SEND_SRC_ON_INVALID_MAPPING");
+        dump_router_connections(target_router_id, "SEND_DST_ON_INVALID_MAPPING");
         send_error_response(source_router_id, event.thread_id, request_id, "Invalid connection mapping");
         return;
     }
