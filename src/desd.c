@@ -2406,6 +2406,16 @@ void handle_connect_request_event(Event event) {
     int thread_id = event.thread_id;
     ThreadInfo *ti = get_thread_info(router_id, thread_id);
     
+    if (ti) {
+        printf("[DEBUG-CONN-REQ] R%d T%d CONNECT_REQUEST to %s (client_fd=%d), ThreadInfo before connect: status=%d blocked_on_function='%s' blocked_on_request_id='%s'\n",
+               router_id, thread_id, destination_abstract_address_local, client_socket_fd,
+               ti->status, ti->blocked_on_function, ti->blocked_on_request_id);
+    } else {
+        printf("[DEBUG-CONN-REQ] R%d T%d CONNECT_REQUEST to %s (client_fd=%d), but no ThreadInfo found\n",
+               router_id, thread_id, destination_abstract_address_local, client_socket_fd);
+    }
+    fflush(stdout);
+    
     if (router_id > 0 && router_id <= MAX_ROUTERS && ti) {
         ti->status = BLOCKED;
         strncpy(ti->blocked_on_request_id, request_id, 63);
@@ -2541,11 +2551,24 @@ void handle_connection_established_event(Event event) {
     int thread_id = event.thread_id;
     ThreadInfo *ti = get_thread_info(router_id, thread_id);
     
+    if (ti) {
+        printf("[DEBUG-CONN-EST] R%d T%d has ThreadInfo for CONNECTION_ESTABLISHED: is_connector=%d client=%d server=%d client_fd=%d conn_id=%lu status=%d blocked_on_function='%s' blocked_on_request_id='%s'\n",
+               router_id, thread_id, is_connector, client_router_id, server_router_id, client_socket_fd, connection_id,
+               ti->status, ti->blocked_on_function, ti->blocked_on_request_id);
+    } else {
+        printf("[DEBUG-CONN-EST] R%d T%d has NO ThreadInfo for CONNECTION_ESTABLISHED: is_connector=%d client=%d server=%d client_fd=%d conn_id=%lu\n",
+               router_id, thread_id, is_connector, client_router_id, server_router_id, client_socket_fd, connection_id);
+    }
+    fflush(stdout);
+    
     if (router_id > 0 && router_id <= MAX_ROUTERS && ti) {
         // 对于 CONNECT 方（发起连接的路由器）
         if (is_connector) {
             if (ti->status == BLOCKED &&
                 strcmp(ti->blocked_on_function, "CONNECT_CALL") == 0) {
+                printf("[DEBUG-CONN-EST] R%d (client) will register connection: client_fd=%d server=%d conn_id=%lu\n",
+                       router_id, client_socket_fd, server_router_id, connection_id);
+                dump_router_connections(client_router_id, "CONN_EST_CLIENT_BEFORE");
                 
                 // 保存路由器自己的 request_id
                 char router_request_id[64];
@@ -2569,12 +2592,18 @@ void handle_connection_established_event(Event event) {
                 memset(ti->blocked_on_request_id, 0, 64);
                 memset(ti->blocked_on_function, 0, 64);
 
+                dump_router_connections(client_router_id, "CONN_EST_CLIENT_AFTER");
+
                 printf("[DESD] R%d (client) connect() completed with R%d.\n", router_id, server_router_id);
                 send_success_response(router_id, ti->thread_id, router_request_id, "CONNECT", "Connection Established", NULL);
             } else {
                 printf("[DESD WARNING] R%d received CONNECTION_ESTABLISHED_EVENT but not blocked on connect (currently %s).\n", 
                        router_id, 
                        ti->status == BLOCKED ? ti->blocked_on_function : "not blocked");
+                printf("[DEBUG-CONN-EST] R%d T%d unexpected CONNECT_ESTABLISHED state: client=%d server=%d client_fd=%d conn_id=%lu status=%d blocked_on_function='%s' blocked_on_request_id='%s'\n",
+                       router_id, thread_id, client_router_id, server_router_id, client_socket_fd, connection_id,
+                       ti->status, ti->blocked_on_function, ti->blocked_on_request_id);
+                fflush(stdout);
             }
         }
         // 对于 ACCEPT 方（接收连接的路由器）
@@ -2583,6 +2612,9 @@ void handle_connection_established_event(Event event) {
             // 使用负数作为虚拟 fd，格式为 -(connection_id + 1000)
             // 🔥 关键修复：使用偏移量避免与 -1（"未设置"标志）冲突
             int virtual_server_fd = -(int)(connection_id + 1000);
+            printf("[DEBUG-CONN-EST] R%d (server) registering virtual connection: virtual_fd=%d client=%d client_fd=%d conn_id=%lu\n",
+                   server_router_id, virtual_server_fd, client_router_id, client_socket_fd, connection_id);
+            dump_router_connections(server_router_id, "CONN_EST_SERVER_BEFORE");
             register_connection(server_router_id, virtual_server_fd, client_router_id, client_socket_fd);
             
             // 设置 connection_id
@@ -2603,6 +2635,8 @@ void handle_connection_established_event(Event event) {
                     break;
                 }
             }
+            dump_router_connections(server_router_id, "CONN_EST_SERVER_AFTER");
+            dump_router_connections(client_router_id, "CONN_EST_CLIENT_PEER_AFTER");
             
             printf("[DESD] R%d (server) virtual connection registered: virtual_fd=%d <-> R%d (client) fd=%d (conn_id=%lu, pending accept).\n",
                    server_router_id, virtual_server_fd, client_router_id, client_socket_fd, connection_id);
