@@ -166,6 +166,52 @@ static unsigned long generate_connection_id() {
     return next_connection_id++;
 }
 
+// === 最近关闭连接表：用于跟踪"client 先关闭"的情况 ===
+// 当 client 在 server 完成 CONNECTION_INFO 前就 close 时，server 侧需要知道这件事
+#define MAX_RECENT_CLOSED_CONNS 512
+
+typedef struct {
+    unsigned long conn_id;          // 连接ID
+    int client_router_id;           // client 路由器ID
+    int server_router_id;           // server 路由器ID（对端）
+    int closed_side;                // 1=client 先关闭, 2=server 先关闭
+    double vt_when_closed;          // 关闭时的虚拟时间
+    int valid;                      // 该 slot 是否有效
+} RecentClosedConn;
+
+static RecentClosedConn recent_closed_conns[MAX_RECENT_CLOSED_CONNS];
+static int recent_closed_conns_next_idx = 0;  // 环形写入位置
+
+// 记录一条连接被关闭（用于后续检测 client 先关闭的情况）
+static void record_closed_connection(unsigned long conn_id, int client_router_id, int server_router_id, int closed_side) {
+    int idx = recent_closed_conns_next_idx;
+    recent_closed_conns[idx].conn_id = conn_id;
+    recent_closed_conns[idx].client_router_id = client_router_id;
+    recent_closed_conns[idx].server_router_id = server_router_id;
+    recent_closed_conns[idx].closed_side = closed_side;
+    recent_closed_conns[idx].vt_when_closed = current_virtual_time;
+    recent_closed_conns[idx].valid = 1;
+    recent_closed_conns_next_idx = (idx + 1) % MAX_RECENT_CLOSED_CONNS;
+    
+    printf("[DESD-RECENT-CLOSED] Recorded conn_id=%lu closed by %s (R%d<->R%d) at VT=%.6f\n",
+           conn_id, closed_side == 1 ? "client" : "server",
+           client_router_id, server_router_id, current_virtual_time);
+}
+
+// 检查某个 conn_id 是否被 client 先关闭了
+// 返回: 1=client 已关闭, 0=未找到或不是 client 关闭
+static int check_client_already_closed(unsigned long conn_id, int expected_client_router_id) {
+    for (int i = 0; i < MAX_RECENT_CLOSED_CONNS; i++) {
+        if (recent_closed_conns[i].valid &&
+            recent_closed_conns[i].conn_id == conn_id &&
+            recent_closed_conns[i].client_router_id == expected_client_router_id &&
+            recent_closed_conns[i].closed_side == 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // --- Per-Thread Helper Functions ---
 
 // 查找或创建指定 router 的线程状态
@@ -2988,6 +3034,16 @@ void handle_connection_info_event(Event event) {
                 
                 printf("[DESD] R%d (server) connection updated: real_fd=%d <-> R%d (client) fd=%d (conn_id=%lu).\n",
                        router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
+                
+                // 🔑 新增：检查 client 是否已经先关闭了
+                // 如果 client 在 server 完成 CONNECTION_INFO 前就 close 了，
+                // 需要标记 server 侧的 peer_closed=1，这样后续发包时会返回 "Peer connection closed" 而不是 "Invalid connection mapping"
+                if (client_router_id > 0 && check_client_already_closed(connection_id, client_router_id)) {
+                    router_states[router_id].connections[i].peer_closed = 1;
+                    printf("[DESD-PEER-CLOSED] R%d (server) conn_id=%lu: client R%d already closed before CONNECTION_INFO completed. Marked peer_closed=1.\n",
+                           router_id, connection_id, client_router_id);
+                }
+                
                 break;
             }
         }
@@ -3080,9 +3136,38 @@ void handle_close_socket_event(Event event) {
             
             int peer_router_id = router_states[router_id].connections[i].peer_router_id;
             int peer_socket_fd = router_states[router_id].connections[i].peer_socket_fd;
+            unsigned long conn_id = router_states[router_id].connections[i].connection_id;
             
-            printf("[DESD] Removing local connection: R%d (fd:%d) <-> R%d (fd:%d)\n",
-                   router_id, socket_fd, peer_router_id, peer_socket_fd);
+            printf("[DESD] Removing local connection: R%d (fd:%d) <-> R%d (fd:%d) conn_id=%lu\n",
+                   router_id, socket_fd, peer_router_id, peer_socket_fd, conn_id);
+            
+            // 🔑 新增：记录到 RecentClosedConn，用于检测"client 先关闭"的情况
+            // 判断当前 router 是 client 还是 server：
+            // - 如果 peer_socket_fd < 0（虚拟 fd）或 peer_socket_fd == -1，说明 server 侧还没完成 accept
+            // - 此时当前 router 是 client 侧
+            // 简化判断：如果当前 router 有一个 entry 指向 peer，且 peer 那边没有对应的 entry，
+            // 或者 peer_socket_fd 是 -1，说明当前是 client 先关闭
+            if (conn_id > 0 && peer_router_id > 0 && peer_router_id <= MAX_ROUTERS) {
+                // 检查 peer 侧是否有这条连接的 entry
+                int peer_has_entry = 0;
+                for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                    if (router_states[peer_router_id].connections[j].is_active &&
+                        router_states[peer_router_id].connections[j].connection_id == conn_id) {
+                        peer_has_entry = 1;
+                        break;
+                    }
+                }
+                
+                // 如果 peer_socket_fd == -1 或者 peer 侧还没有 entry，说明是 client 先关闭
+                // 此时 router_id 是 client，peer_router_id 是 server
+                if (peer_socket_fd == -1 || !peer_has_entry) {
+                    record_closed_connection(conn_id, router_id, peer_router_id, 1);  // closed_side=1 表示 client
+                } else {
+                    // 否则记录为 server 关闭（或双方都已建立后的关闭）
+                    // 这里仍然记录，但 closed_side=2
+                    record_closed_connection(conn_id, peer_router_id, router_id, 2);  // closed_side=2 表示 server
+                }
+            }
             
             // 删除本router的连接记录
             router_states[router_id].connections[i].is_active = 0;

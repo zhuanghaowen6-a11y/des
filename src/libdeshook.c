@@ -1373,11 +1373,25 @@ ssize_t send(int sockfd, const void *buf, size_t len, int flags) {
                     error_message = json_string_value(error_msg_json);
                 }
             }
-            fprintf(stderr, "[LIBDESHOOK ERROR] R%d send() failed (DESD rejected or error): %s.\n", my_router_id,
-                            error_message);
-            if (resp_payload_obj) json_decref(resp_payload_obj);
-            errno = ECOMM; // Simulate communication error
-            return -1;
+            
+            // 🔑 区分 "Peer connection closed" 和其他错误
+            // "Peer connection closed" 是正常的 BGP 会话关闭，应该返回 EPIPE/ECONNRESET
+            // 其他错误（如 "Invalid connection mapping"）是 DESD 内部问题，返回 ECOMM
+            if (strstr(error_message, "Peer connection closed") != NULL ||
+                strstr(error_message, "peer has closed") != NULL) {
+                // 对端已关闭连接，这是正常的 BGP 会话错误，不是 DESD 内部错误
+                fprintf(stderr, "[LIBDESHOOK] R%d send() failed: peer connection closed (normal BGP session error).\n", my_router_id);
+                if (resp_payload_obj) json_decref(resp_payload_obj);
+                errno = EPIPE;  // 模拟"对端关闭"的正常 socket 错误
+                return -1;
+            } else {
+                // 其他错误（如 Invalid connection mapping）是 DESD 内部问题
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d send() failed (DESD rejected or error): %s.\n", my_router_id,
+                                error_message);
+                if (resp_payload_obj) json_decref(resp_payload_obj);
+                errno = ECOMM; // Simulate communication error
+                return -1;
+            }
         }
     } else {
         fprintf(stderr, "[LIBDESHOOK ERROR] R%d send() failed: No response from desd.\n", my_router_id);
