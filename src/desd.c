@@ -2510,6 +2510,21 @@ void handle_connect_request_event(Event event) {
             return;
         }
         
+        // ========== Collision Policy: 只允许较小 ID 向较大 ID 主动连接 ==========
+        // 目的：消灭 simultaneous open，避免 BIRD 自身的 collision 逻辑与 DES 控制逻辑互相叠加
+        // 规则：如果 client_router_id > server_router_id，则抑制此次 connect，让对端作为 active 侧
+        if (router_id > target_router_id) {
+            printf("[DESD-COLLISION-POLICY] Suppressing CONNECT_REQUEST from R%d to R%d "
+                   "(policy: only smaller ID initiates, R%d will act as active side)\n",
+                   router_id, target_router_id, target_router_id);
+            send_error_response(router_id, thread_id, request_id, 
+                                "Connect suppressed by collision policy");
+            ti->status = RUNNING;  // 解除阻塞，让 BIRD 正常处理连接失败
+            memset(ti->blocked_on_request_id, 0, 64);
+            memset(ti->blocked_on_function, 0, 64);
+            return;
+        }
+        
         // 简化：只显示连接结果，不显示匹配过程
         
         // 生成唯一连接ID

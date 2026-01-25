@@ -1005,8 +1005,20 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
                     error_message = json_string_value(error_msg_json);
                 }
             }
-            fprintf(stderr, "[LIBDESHOOK ERROR] R%d connect() failed (DESD rejected or error): %s.\n", my_router_id,
-                            error_message);
+            
+            // 区分 collision policy（正常的策略抑制）和其他错误
+            if (strstr(error_message, "collision policy") != NULL) {
+                // Collision policy 抑制：这不是真正的错误，只是我们的策略让对端作为 active 侧
+                // 打普通日志，不打 ERROR
+                printf("[LIBDESHOOK] R%d connect() suppressed by collision policy, letting peer initiate.\n", 
+                       my_router_id);
+                fflush(stdout);
+            } else {
+                // 其他错误：打 ERROR 日志
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d connect() failed (DESD rejected or error): %s.\n", 
+                        my_router_id, error_message);
+            }
+            
             if (resp_payload_obj) json_decref(resp_payload_obj);
             errno = ECONNREFUSED; // Simulate connection refused
             return -1;
