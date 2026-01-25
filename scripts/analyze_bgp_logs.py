@@ -192,28 +192,37 @@ def analyze_bird_log(log_path, router_id, expected_peers):
         
         # 统计
         ever_established = any(s[1] in ('established', 'up') for s in states)
-        last_state = states[-1][1]
         close_count = sum(1 for s in states if s[1] in ('closed', 'down', 'connection_error'))
         
         if not ever_established:
-            # 从未成功建立过（只有 close/down 记录，无 established/up）
+            # 从未成功建立过（只有 close/down/connection_error 记录，无 established/up）
             # 保持在 never_established
             continue
         
         # 曾经建立过
         result['never_established'].discard(peer)
         
-        # 规则4：检测 flap
+        # 规则4：检测 flap（仍然统计 connection_error）
         if close_count >= FLAP_THRESHOLD:
             result['flapping'][peer] = close_count
         
-        # 规则2 & 规则3：根据最终状态判定
-        if last_state in ('established', 'up'):
+        # 规则2 & 规则3：根据最终 BGP 状态判定
+        # 只使用明确的 BGP 状态（established/up/closed/down）来决定最终是否异常断开，
+        # 避免单纯因为 Connection closed/reset（connection_error）就判定为异常。
+        bgp_states = [s for s in states if s[1] in ('established', 'up', 'closed', 'down')]
+        if not bgp_states:
+            # 理论上 ever_established=True 时一定会有至少一个 established/up；
+            # 为稳妥起见，如果不存在明确的 BGP 状态，则只认为其曾经建立过，不判为异常断开。
+            result['established'].add(peer)
+            continue
+        
+        last_bgp_state = bgp_states[-1][1]
+        if last_bgp_state in ('established', 'up'):
             # 规则2：最终状态是 up/established → healthy
             result['established'].add(peer)
-            # 不加入 closed，即使期间有过 close
+            # 不加入 closed，即使期间有过 close/connection_error
         else:
-            # 规则3：最终状态是 closed/down/connection_error → 异常断开
+            # 规则3：最终 BGP 状态是 closed/down → 异常断开
             result['established'].add(peer)  # 仍然记录曾经建立过
             result['closed'].add(peer)
     
