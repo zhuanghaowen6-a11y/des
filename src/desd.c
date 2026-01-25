@@ -18,13 +18,14 @@
 //pthread_cond_t event_queue_cond = PTHREAD_COND_INITIALIZER; // 用于pop_event在队列为空时等待事件
 
 // Event Queue (min-heap)
-#define MAX_EVENTS 100001
+#define MAX_SIM_EVENTS 10000000
+#define MAX_EVENTS (MAX_SIM_EVENTS + 1)
 Event event_queue[MAX_EVENTS];
 int event_queue_size = 0;
 
 // Active Events (for quick lookup and cancellation)
 // 现在不再保存实际事件的指针，因为事件是值传递的。用于标记事件是否已被取消。
-#define MAX_ACTIVE_EVENTS 100001  // 限制为 100,000 个事件，用于调试
+#define MAX_ACTIVE_EVENTS (MAX_SIM_EVENTS + 1)  // 与 MAX_SIM_EVENTS 保持一致
 // Event* active_events[MAX_ACTIVE_EVENTS]; // 不再需要，因为不再存储事件引用
 int event_active_status[MAX_ACTIVE_EVENTS]; // 0: inactive, 1: active (简化)
 
@@ -1084,8 +1085,8 @@ void heapify_down(int idx) {
 
 void push_event(Event new_event) {
 
-    // 调试限制：不再接收超过 100,000 的事件
-    if (new_event.event_id >= 100000) {
+    // 调试限制：不再接收超过 MAX_SIM_EVENTS 的事件
+    if (new_event.event_id >= MAX_SIM_EVENTS) {
         return;
     }
 
@@ -2088,11 +2089,11 @@ void desd_event_loop() {
             continue;
         }
 
-        // 调试限制：达到 99,000 个事件后停止
-        if (current_event.event_id >= 99000) {
-            printf("[DESD-STOP] Reached 99,000 events limit (EventID: %lu). Stopping simulation.\n", current_event.event_id);
-            printf("[DESD-EXIT] Reason: Event limit reached (99,000). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
-                   current_virtual_time, heartbeat_event_counter);
+        // 调试限制：达到 3,000,000 个事件后停止
+        if (current_event.event_id >= 3000000) {
+            printf("[DESD-STOP] Reached 3,000,000 events limit (EventID: %lu). Stopping simulation.\n", current_event.event_id);
+            printf("[DESD-EXIT] Reason: Event limit reached (3,000,000). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
+                    current_virtual_time, heartbeat_event_counter);
             exit(0);
         }
 
