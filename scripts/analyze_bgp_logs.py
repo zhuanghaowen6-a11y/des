@@ -229,7 +229,42 @@ def analyze_bird_log(log_path, router_id, expected_peers):
     return result
 
 
-def analyze_all_logs(num_routers, log_dir):
+def build_expected_peers(num_routers, topology_mode):
+    """根据拓扑模式构造每个路由器的期望邻居列表。
+
+    拓扑模式支持：
+    - 'full-mesh': 每个路由器与其他所有路由器建立会话
+    - 'ring': 每个路由器只与前后两个邻居建立会话（环形），NUM_ROUTERS=2 时只有一个邻居
+    """
+
+    peers_per_router = {}
+
+    if topology_mode == "ring":
+        for router_id in range(1, num_routers + 1):
+            left = router_id - 1
+            right = router_id + 1
+            if left < 1:
+                left = num_routers
+            if right > num_routers:
+                right = 1
+
+            if left == right:
+                neighbors = [f"r{left}"]
+            else:
+                neighbors = [f"r{left}", f"r{right}"]
+
+            peers_per_router[router_id] = neighbors
+
+    else:  # 默认 full-mesh
+        all_peers = [f"r{i}" for i in range(1, num_routers + 1)]
+        for router_id in range(1, num_routers + 1):
+            router_name = f"r{router_id}"
+            peers_per_router[router_id] = [p for p in all_peers if p != router_name]
+
+    return peers_per_router
+
+
+def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
     """
     分析所有日志，综合判断测试结果。
     """
@@ -253,12 +288,22 @@ def analyze_all_logs(num_routers, log_dir):
     
     # 2. 分析 BIRD 日志
     print_header("2. BGP 会话状态检查")
-    
-    # 构建期望的 peer 列表
-    all_peers = [f"r{i}" for i in range(1, num_routers + 1)]
-    
+
+    topology_mode = topology_mode or "full-mesh"
+    print_info(f"拓扑模式: {topology_mode}")
+
+    # 构建期望的 peer 列表（支持 full-mesh / ring）
+    peers_per_router = build_expected_peers(num_routers, topology_mode)
+
     # 统计
-    total_expected = num_routers * (num_routers - 1)  # full-mesh
+    if topology_mode == "ring":
+        # 每条会话在两个方向都会被统计一次，这里保持和 full-mesh 一致：按有向会话计数
+        if num_routers == 2:
+            total_expected = 2  # r1<->r2，各算一次
+        else:
+            total_expected = num_routers * 2  # 每个路由器有两个邻居
+    else:
+        total_expected = num_routers * (num_routers - 1)  # full-mesh
     total_established = 0
     total_closed = 0
     total_never_established = 0
@@ -268,8 +313,7 @@ def analyze_all_logs(num_routers, log_dir):
     flapping_warnings = []  # 用于最终汇总
     
     for router_id in range(1, num_routers + 1):
-        router_name = f"r{router_id}"
-        expected_peers = [p for p in all_peers if p != router_name]
+        expected_peers = peers_per_router.get(router_id, [])
         
         # 尝试多个可能的日志路径
         possible_paths = [
@@ -337,7 +381,8 @@ def analyze_all_logs(num_routers, log_dir):
     # 3. 总结
     print_header("3. 测试结果总结")
     
-    print(f"\n{Colors.BOLD}会话统计 (Full-Mesh):{Colors.END}")
+    topo_label = "Full-Mesh" if topology_mode == "full-mesh" else "Ring"
+    print(f"\n{Colors.BOLD}会话统计 ({topo_label}):{Colors.END}")
     print(f"  期望会话数: {total_expected}")
     print(f"  成功建立数: {total_established}")
     print(f"  从未建立数: {total_never_established}")
@@ -370,7 +415,7 @@ def analyze_all_logs(num_routers, log_dir):
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
-        print(f"用法: {sys.argv[0]} <num_routers> <log_dir>")
+        print(f"用法: {sys.argv[0]} <num_routers> <log_dir> [topology_mode]")
         sys.exit(1)
     
     try:
@@ -380,12 +425,20 @@ def main():
         sys.exit(1)
     
     log_dir = sys.argv[2]
+
+    # 拓扑模式：可通过第 3 个参数或环境变量 TOPOLOGY_MODE 指定
+    topo_from_arg = sys.argv[3] if len(sys.argv) >= 4 else None
+    topo_from_env = os.environ.get("TOPOLOGY_MODE")
+    topology_mode = (topo_from_arg or topo_from_env or "full-mesh").lower()
+    if topology_mode not in ("full-mesh", "ring"):
+        print(f"错误: 不支持的拓扑模式: {topology_mode} (期望: full-mesh 或 ring)")
+        sys.exit(1)
     
     if not os.path.isdir(log_dir):
         print(f"错误: 日志目录不存在: {log_dir}")
         sys.exit(1)
     
-    exit_code = analyze_all_logs(num_routers, log_dir)
+    exit_code = analyze_all_logs(num_routers, log_dir, topology_mode=topology_mode)
     sys.exit(exit_code)
 
 

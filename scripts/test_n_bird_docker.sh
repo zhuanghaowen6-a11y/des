@@ -145,7 +145,27 @@ protocol static static4 {
 EOF
 
     # 添加BGP配置 - 与所有其他路由器建立会话（full mesh）
-    for j in $(seq 1 $NUM_ROUTERS); do
+    # 实际上，这里改为环形拓扑：每个路由器只与前后两个邻居建立 BGP 会话
+
+    # 计算环形拓扑中的前后邻居编号
+    LEFT=$((i - 1))
+    RIGHT=$((i + 1))
+    if [ $LEFT -lt 1 ]; then
+        LEFT=$NUM_ROUTERS
+    fi
+    if [ $RIGHT -gt $NUM_ROUTERS ]; then
+        RIGHT=1
+    fi
+
+    # 构造去重后的邻居列表（NUM_ROUTERS=2 时避免重复）
+    if [ "$LEFT" -eq "$RIGHT" ]; then
+        NEIGHBORS="$LEFT"
+    else
+        NEIGHBORS="$LEFT $RIGHT"
+    fi
+
+    for j in $NEIGHBORS; do
+        # 理论上不会等于自身，但这里防御性跳过
         if [ $i -ne $j ]; then
             PEER_IP="10.0.$j.$j"
             PEER_AS="6500$j"
@@ -326,7 +346,8 @@ echo ""
 ANALYZE_SCRIPT="${SCRIPT_DIR}/analyze_bgp_logs.py"
 
 if [ -f "$ANALYZE_SCRIPT" ]; then
-    python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "logs"
+    # 当前脚本生成的是环形拓扑配置，因此这里显式使用 ring 模式进行分析
+    python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "logs" ring
     ANALYZE_RESULT=$?
 else
     log_error "分析脚本不存在: $ANALYZE_SCRIPT"
