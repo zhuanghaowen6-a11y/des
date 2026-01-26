@@ -2804,7 +2804,7 @@ void handle_connection_established_event(Event event) {
                     Message response = {
                         .message_type = DESD_TO_HOOK,
                         .router_id = router_id,
-                        .thread_id = thread_id,
+                        .thread_id = select_ti->thread_id,  // 修复：使用被唤醒线程的 thread_id，而非事件的 thread_id
                         .virtual_time = current_virtual_time
                     };
                     strncpy(response.request_id, request_id, 63);
@@ -2814,8 +2814,8 @@ void handle_connection_established_event(Event event) {
                     free(response_payload_str);
                     send_message_to_router(router_id, &response);
                     
-                    printf("[DESD] R%d was blocked on select and now awakened by CONNECTION_ESTABLISHED_EVENT (listening socket now has POLLIN, %zu ready FD(s)).\n",
-                           router_id, ready_fds_count);
+                    printf("[DESD] R%d T%d was blocked on select and now awakened by CONNECTION_ESTABLISHED_EVENT (listening socket now has POLLIN, %zu ready FD(s)).\n",
+                           router_id, select_ti->thread_id, ready_fds_count);
                     printf("[DEBUG-WAKEUP] R%d awakened from SELECT, pending_connections=%d, ready_fds_count=%zu\n",
                            router_id, router_states[router_id].pending_connections_count, ready_fds_count);
                 } else {
@@ -4138,6 +4138,7 @@ void handle_packet_receive_event(Event event) {
                     Message response = {
                         .message_type = DESD_TO_HOOK,
                         .router_id = target_router_id,
+                        .thread_id = blocked_ti->thread_id,  // 修复：使用被唤醒线程的 thread_id
                         .virtual_time = current_virtual_time
                     };
                     strncpy(response.request_id, request_id, 63);
@@ -4151,7 +4152,7 @@ void handle_packet_receive_event(Event event) {
                     router_states[target_router_id].packet_buffers[buffer_index].is_used = 0;
                 }
                 
-                printf("[DESD] R%d was blocked on recv and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, destination_abstract_address);
+                printf("[DESD] R%d T%d was blocked on recv and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, blocked_ti->thread_id, destination_abstract_address);
             } else if (strcmp(blocked_func, "SELECT_CALL") == 0) {
                 // 情况1b：接收方在 select 上等待，需要检查数据包是否匹配监听的fd
                 char request_id[64];
@@ -4296,6 +4297,7 @@ void handle_packet_receive_event(Event event) {
                 Message response = {
                     .message_type = DESD_TO_HOOK,
                     .router_id = target_router_id,
+                    .thread_id = blocked_ti->thread_id,  // 修复：使用被唤醒线程的 thread_id
                     .virtual_time = current_virtual_time
                 };
                 strncpy(response.request_id, request_id, 63);
@@ -4305,8 +4307,8 @@ void handle_packet_receive_event(Event event) {
                 free(response_payload_str);
                 send_message_to_router(target_router_id, &response);
                 
-                printf("[DESD] R%d was blocked on select and now awakened by PACKET_RECEIVE_EVENT for %s (buffer_index=%d added to pending queue, %zu unique FDs).\n", 
-                       target_router_id, destination_abstract_address, buffer_index, ready_fds_count);
+                printf("[DESD] R%d T%d was blocked on select and now awakened by PACKET_RECEIVE_EVENT for %s (buffer_index=%d added to pending queue, %zu unique FDs).\n", 
+                       target_router_id, blocked_ti->thread_id, destination_abstract_address, buffer_index, ready_fds_count);
             } else {
                 // 其他阻塞类型，记录为 pending
                 router_states[target_router_id].pending_packets_count++;
