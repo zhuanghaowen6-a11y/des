@@ -39,7 +39,7 @@ typedef struct {
 EventOwnerInfo event_owner_info[MAX_ACTIVE_EVENTS];
 
 // Router States
-#define MAX_ROUTERS 200 // Support up to 200 routers
+#define MAX_ROUTERS 250 // Support up to 200 routers
 #define MAX_CONNECTIONS_PER_ROUTER 200 // 每个路由器最多支持的连接数
 
 // 连接信息结构
