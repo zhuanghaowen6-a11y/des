@@ -113,10 +113,11 @@ static void thread_state_destructor(void *ptr) {
     if (state) {
         if (state->desd_socket_fd >= 0) {
             fprintf(stderr,
-                    "[LIBDESHOOK DEBUG] R%d T%d thread_state_destructor: closing DESD control socket fd=%d on thread exit.\n",
+                    "[LIBDESHOOK DEBUG] R%d T%d thread_state_destructor: closing DESD control socket fd=%d on thread exit at VT=%.6f.\n",
                     my_router_id,
                     state->thread_id,
-                    state->desd_socket_fd);
+                    state->desd_socket_fd,
+                    current_virtual_time);
             fflush(stderr);
             real_close(state->desd_socket_fd);
         }
@@ -2078,6 +2079,24 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
 int close(int sockfd) {
     printf("[LIBDESHOOK] R%d intercepted close() for sockfd %d.\n", my_router_id, sockfd);
     
+    // 检查是否是当前线程的 DESD 控制 socket
+    ThreadState *state = get_thread_state();
+    int is_desd_control_socket = 0;
+    int state_thread_id = -1;
+    if (state && state->desd_socket_fd >= 0 && sockfd == state->desd_socket_fd) {
+        is_desd_control_socket = 1;
+        state_thread_id = state->thread_id;
+    }
+    if (is_desd_control_socket) {
+        fprintf(stderr,
+                "[LIBDESHOOK ERROR] R%d T%d close() called on DESD control socket fd=%d at VT=%.6f.\n",
+                my_router_id,
+                state_thread_id,
+                sockfd,
+                current_virtual_time);
+        fflush(stderr);
+    }
+
     // 检查是否是DES管理的socket
     int is_des_socket = 0;
     if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
