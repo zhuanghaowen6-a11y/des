@@ -17,8 +17,8 @@ SCRIPT_DIR="${PROJECT_ROOT}/scripts"
 NUM_ROUTERS=${1:-5}
 TEST_DURATION=${2:-60}
 
-if [ "$NUM_ROUTERS" -lt 2 ] || [ "$NUM_ROUTERS" -gt 100 ]; then
-    echo "[ERROR] NUM_ROUTERS must be between 2 and 100"
+if [ "$NUM_ROUTERS" -lt 2 ] || [ "$NUM_ROUTERS" -gt 200 ]; then
+    echo "[ERROR] NUM_ROUTERS must be between 2 and 200"
     exit 1
 fi
 
