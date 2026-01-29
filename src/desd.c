@@ -13,9 +13,9 @@
 #include <stdint.h> // For uintptr_t
 
 // --- Global DESD State ---
-// 尽管是单线程，但事件队列的访问和条件变量的等待仍需要互斥锁。
-//pthread_mutex_t desd_state_mutex = PTHREAD_MUTEX_INITIALIZER;
-//pthread_cond_t event_queue_cond = PTHREAD_COND_INITIALIZER; // 用于pop_event在队列为空时等待事件
+// 事件队列的访问需要互斥锁保护，因为 registration_thread 和主事件循环会并发访问
+pthread_mutex_t event_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t event_queue_cond = PTHREAD_COND_INITIALIZER; // 用于pop_event在队列为空时等待事件
 
 // Event Queue (min-heap)
 // 方案B：队列容量 vs 总事件数上限 解耦
@@ -1086,17 +1086,20 @@ void heapify_down(int idx) {
 }
 
 void push_event(Event new_event) {
+    pthread_mutex_lock(&event_queue_mutex);
 
     // 调试限制：不再接收超过 MAX_TOTAL_EVENTS 的事件
     if (new_event.event_id >= MAX_TOTAL_EVENTS) {
         fprintf(stderr, "[DESD WARNING] Event ID %lu exceeds MAX_TOTAL_EVENTS (%d), dropping.\n",
                 new_event.event_id, MAX_TOTAL_EVENTS);
+        pthread_mutex_unlock(&event_queue_mutex);
         return;
     }
 
     if (event_queue_size >= MAX_EVENT_QUEUE_SIZE) {
         fprintf(stderr, "[DESD ERROR] Event queue is full (size=%d, max=%d)!\n",
                 event_queue_size, MAX_EVENT_QUEUE_SIZE);
+        pthread_mutex_unlock(&event_queue_mutex);
         return;
     }
     event_queue[event_queue_size] = new_event;
@@ -1116,17 +1119,15 @@ void push_event(Event new_event) {
     if (ti) {
         ti->pending_event_count++;
     }
-    //pthread_cond_signal(&event_queue_cond); // Signal event loop (if it's waiting)
-
+    pthread_cond_signal(&event_queue_cond); // Signal event loop (if it's waiting)
+    pthread_mutex_unlock(&event_queue_mutex);
 }
 
 Event pop_event() {
-    //pthread_mutex_lock(&desd_state_mutex);
+    pthread_mutex_lock(&event_queue_mutex);
     while (event_queue_size == 0) {
-        continue;
         // 等待新事件的到来
-        printf("[DESD] Event queue is empty. Waiting for initial events...\n");
-        //pthread_cond_wait(&event_queue_cond, &desd_state_mutex);
+        pthread_cond_wait(&event_queue_cond, &event_queue_mutex);
     }
 
     Event root = event_queue[0];
@@ -1139,13 +1140,13 @@ Event pop_event() {
     event_queue[0] = event_queue[event_queue_size];
     heapify_down(0);
 
-    //pthread_mutex_unlock(&desd_state_mutex);
+    pthread_mutex_unlock(&event_queue_mutex);
     return root;
 }
 
 // 取消事件：将事件标记为非活跃状态，事件循环会跳过它
 void cancel_event(unsigned long event_id) {
-    //pthread_mutex_lock(&desd_state_mutex);
+    pthread_mutex_lock(&event_queue_mutex);
     if (event_id < MAX_ACTIVE_EVENTS && event_active_status[event_id] == 1) {
         event_active_status[event_id] = 0; // Mark as inactive
         printf("[DESD] Canceled event %lu.\n", event_id);
@@ -1158,13 +1159,13 @@ void cancel_event(unsigned long event_id) {
             ti->pending_event_count--;
         }
     }
-    //pthread_mutex_unlock(&desd_state_mutex);
+    pthread_mutex_unlock(&event_queue_mutex);
 }
 
 int is_event_queue_empty() {
-    //pthread_mutex_lock(&desd_state_mutex);
+    pthread_mutex_lock(&event_queue_mutex);
     int empty = (event_queue_size == 0);
-    //pthread_mutex_unlock(&desd_state_mutex);
+    pthread_mutex_unlock(&event_queue_mutex);
     return empty;
 }
 
@@ -2094,11 +2095,11 @@ void desd_event_loop() {
         }
 
         // 调试限制：达到 MAX_TOTAL_EVENTS 个事件后停止
-        if (current_event.event_id >= MAX_TOTAL_EVENTS/6) {
+        if (current_event.event_id >= MAX_TOTAL_EVENTS/3) {
             printf("[DESD-STOP] Reached %d events limit (EventID: %lu). Stopping simulation.\n",
-                   MAX_TOTAL_EVENTS/6, current_event.event_id);
+                   MAX_TOTAL_EVENTS/3, current_event.event_id);
             printf("[DESD-EXIT] Reason: Event limit reached (%d). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
-                   MAX_TOTAL_EVENTS/6, current_virtual_time, heartbeat_event_counter);
+                   MAX_TOTAL_EVENTS/3, current_virtual_time, heartbeat_event_counter);
             exit(0);
         }
 

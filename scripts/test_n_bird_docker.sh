@@ -16,6 +16,13 @@ SCRIPT_DIR="${PROJECT_ROOT}/scripts"
 # 默认参数
 NUM_ROUTERS=${1:-5}
 TEST_DURATION=${2:-60}
+TOPOLOGY_MODE=${TOPOLOGY_MODE:-${3:-ring}}
+TOPOLOGY_MODE=${TOPOLOGY_MODE,,}
+
+if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ]; then
+    echo "[ERROR] TOPOLOGY_MODE must be 'ring' or 'full-mesh'"
+    exit 1
+fi
 
 if [ "$NUM_ROUTERS" -lt 2 ] || [ "$NUM_ROUTERS" -gt 250 ]; then
     echo "[ERROR] NUM_ROUTERS must be between 2 and 250"
@@ -28,6 +35,7 @@ echo "Routers: $NUM_ROUTERS"
 echo "Test Duration: ${TEST_DURATION}s"
 echo "KEEP_ENV: $KEEP_ENV (1=保留环境, 0=自动清理)"
 echo "ENABLE_STRACE: $ENABLE_STRACE (1=开启strace, 0=关闭)"
+echo "TOPOLOGY_MODE: $TOPOLOGY_MODE (ring/full-mesh)"
 echo "=========================================="
 
 # 日志函数
@@ -147,21 +155,25 @@ EOF
     # 添加BGP配置 - 与所有其他路由器建立会话（full mesh）
     # 实际上，这里改为环形拓扑：每个路由器只与前后两个邻居建立 BGP 会话
 
-    # 计算环形拓扑中的前后邻居编号
-    LEFT=$((i - 1))
-    RIGHT=$((i + 1))
-    if [ $LEFT -lt 1 ]; then
-        LEFT=$NUM_ROUTERS
-    fi
-    if [ $RIGHT -gt $NUM_ROUTERS ]; then
-        RIGHT=1
-    fi
+    if [ "$TOPOLOGY_MODE" = "ring" ]; then
+        # 计算环形拓扑中的前后邻居编号
+        LEFT=$((i - 1))
+        RIGHT=$((i + 1))
+        if [ $LEFT -lt 1 ]; then
+            LEFT=$NUM_ROUTERS
+        fi
+        if [ $RIGHT -gt $NUM_ROUTERS ]; then
+            RIGHT=1
+        fi
 
-    # 构造去重后的邻居列表（NUM_ROUTERS=2 时避免重复）
-    if [ "$LEFT" -eq "$RIGHT" ]; then
-        NEIGHBORS="$LEFT"
+        # 构造去重后的邻居列表（NUM_ROUTERS=2 时避免重复）
+        if [ "$LEFT" -eq "$RIGHT" ]; then
+            NEIGHBORS="$LEFT"
+        else
+            NEIGHBORS="$LEFT $RIGHT"
+        fi
     else
-        NEIGHBORS="$LEFT $RIGHT"
+        NEIGHBORS=$(seq 1 $NUM_ROUTERS)
     fi
 
     for j in $NEIGHBORS; do
@@ -254,8 +266,6 @@ done
 
 log_info "✓ 所有容器已启用 core dump（core 文件写入宿主机 /tmp）"
 
-
-
 log_step "步骤7: 启动desd"
 sudo rm -f /tmp/desd_control_socket /tmp/router_socket
 mkdir -p logs
@@ -346,8 +356,7 @@ echo ""
 ANALYZE_SCRIPT="${SCRIPT_DIR}/analyze_bgp_logs.py"
 
 if [ -f "$ANALYZE_SCRIPT" ]; then
-    # 当前脚本生成的是环形拓扑配置，因此这里显式使用 ring 模式进行分析
-    python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "logs" ring
+    python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "logs" "$TOPOLOGY_MODE"
     ANALYZE_RESULT=$?
 else
     log_error "分析脚本不存在: $ANALYZE_SCRIPT"
