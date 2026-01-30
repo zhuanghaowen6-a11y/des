@@ -1192,6 +1192,51 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                 errno = saved_errno;
                 return new_fd;  // accept 失败，返回 -1
             }
+
+            {
+                struct sockaddr_storage peer_addr;
+                socklen_t peer_len = sizeof(peer_addr);
+                int peername_ret = getpeername(new_fd, (struct sockaddr *)&peer_addr, &peer_len);
+                if (peername_ret == 0) {
+                    if (peer_addr.ss_family == AF_INET) {
+                        struct sockaddr_in *peer_in = (struct sockaddr_in *)&peer_addr;
+                        char peer_ip[INET_ADDRSTRLEN];
+                        const char *ntop_ret = inet_ntop(AF_INET, &(peer_in->sin_addr), peer_ip, sizeof(peer_ip));
+                        int peer_port = ntohs(peer_in->sin_port);
+                        int derived_peer_rid = -1;
+                        int o1 = 0, o2 = 0, o3 = 0, o4 = 0;
+                        if (ntop_ret && sscanf(peer_ip, "%d.%d.%d.%d", &o1, &o2, &o3, &o4) == 4 &&
+                            o1 == 10 && o2 == 0 && o3 == o4 && o3 > 0 && o3 < 256) {
+                            derived_peer_rid = o3;
+                        }
+                        printf("[LIBDESHOOK-ACCEPT-PEER] R%d accept() conn_id=%lu expected_peer=R%d real_peer=%s:%d derived_peer=R%d new_fd=%d listen_fd=%d\n",
+                               my_router_id, connection_id, client_router_id,
+                               ntop_ret ? peer_ip : "<inet_ntop_failed>",
+                               peer_port, derived_peer_rid, new_fd, sockfd);
+                        fflush(stdout);
+                        if (derived_peer_rid > 0 && client_router_id > 0 && derived_peer_rid != client_router_id) {
+                            fprintf(stderr,
+                                    "[LIBDESHOOK-ACCEPT-MISMATCH] R%d conn_id=%lu expected_peer=R%d BUT real_peer=%s:%d derived_peer=R%d (new_fd=%d listen_fd=%d)\n",
+                                    my_router_id, connection_id, client_router_id,
+                                    ntop_ret ? peer_ip : "<inet_ntop_failed>",
+                                    peer_port, derived_peer_rid, new_fd, sockfd);
+                            fflush(stderr);
+                        }
+                    } else {
+                        printf("[LIBDESHOOK-ACCEPT-PEER] R%d accept() conn_id=%lu expected_peer=R%d real_peer_family=%d new_fd=%d listen_fd=%d\n",
+                               my_router_id, connection_id, client_router_id,
+                               peer_addr.ss_family, new_fd, sockfd);
+                        fflush(stdout);
+                    }
+                } else {
+                    int peer_errno = errno;
+                    fprintf(stderr,
+                            "[LIBDESHOOK-ACCEPT-PEER] R%d accept() conn_id=%lu expected_peer=R%d getpeername failed: errno=%d (%s) new_fd=%d listen_fd=%d\n",
+                            my_router_id, connection_id, client_router_id,
+                            peer_errno, strerror(peer_errno), new_fd, sockfd);
+                    fflush(stderr);
+                }
+            }
             
             // 3. accept 成功，发送 CONNECTION_INFO_EVENT 给 desd，通知新连接的 fd
             printf("[LIBDESHOOK-DEBUG] R%d accept() SUCCESS, new_fd=%d, preparing to send CONNECTION_INFO_EVENT...\n",
