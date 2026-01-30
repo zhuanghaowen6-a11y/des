@@ -121,7 +121,7 @@ log_step "步骤2: 生成BIRD配置文件"
 for i in $(seq 1 $NUM_ROUTERS); do
     ROUTER_IP="10.0.$i.$i"
     ROUTER_ID="$ROUTER_IP"
-    AS_NUMBER="6500$i"
+    AS_NUMBER=$((65000 + i))
     
     cat > /tmp/bird_r${i}.conf << EOF
 log stderr all;
@@ -180,7 +180,7 @@ EOF
         # 理论上不会等于自身，但这里防御性跳过
         if [ $i -ne $j ]; then
             PEER_IP="10.0.$j.$j"
-            PEER_AS="6500$j"
+            PEER_AS=$((65000 + j))
             cat >> /tmp/bird_r${i}.conf << EOF
 protocol bgp r$j {
     description "BGP to R$j";
