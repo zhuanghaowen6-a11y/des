@@ -2993,30 +2993,37 @@ void handle_connection_info_event(Event event) {
             }
         }
     } else {
-        // 服务端发送的 CONNECTION_INFO_EVENT
-        // 查找并替换之前注册的虚拟连接（virtual_fd 为负数）
+        // 方案 P：服务端发送的 CONNECTION_INFO_EVENT，使用 real_peer_router_id 进行后验匹配
+        // 不再依赖 connection_id 查找虚拟连接，而是根据真实 peer 匹配
+        int real_peer_router_id = json_integer_value(json_object_get(payload_obj, "real_peer_router_id"));
         int client_router_id = -1;
         int peer_socket_fd = -1;
-        int virtual_server_fd = -(int)(connection_id + 1000);
         int found_virtual_connection = 0;
+        unsigned long matched_connection_id = 0;
+        int matched_virtual_fd = 0;
         
-        printf("[DEBUG-CONN-INFO] R%d (server) sending CONNECTION_INFO for fd=%d, conn_id=%lu (looking for virtual_fd=%d)\n", 
-               router_id, socket_fd, connection_id, virtual_server_fd);
+        printf("[DEBUG-CONN-INFO] R%d (server) Plan P: CONNECTION_INFO for fd=%d, real_peer_router_id=%d\n", 
+               router_id, socket_fd, real_peer_router_id);
         // 调试：在查找/替换虚拟连接前先 dump 当前 server 侧连接表
         dump_router_connections(router_id, "CONN_INFO_SERVER_BEFORE");
         
-        // 首先在 server 端查找虚拟连接
+        // 方案 P：在 server 端查找虚拟连接，匹配条件：
+        // - is_active == 1
+        // - socket_fd < 0 (虚拟 fd)
+        // - peer_router_id == real_peer_router_id
         for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
             if (router_states[router_id].connections[i].is_active &&
-                router_states[router_id].connections[i].socket_fd == virtual_server_fd &&
-                router_states[router_id].connections[i].connection_id == connection_id) {
+                router_states[router_id].connections[i].socket_fd < 0 &&
+                router_states[router_id].connections[i].peer_router_id == real_peer_router_id) {
                 
                 // 找到了虚拟连接！
+                matched_connection_id = router_states[router_id].connections[i].connection_id;
+                matched_virtual_fd = router_states[router_id].connections[i].socket_fd;
                 client_router_id = router_states[router_id].connections[i].peer_router_id;
                 peer_socket_fd = router_states[router_id].connections[i].peer_socket_fd;
                 
-                printf("[DESD] R%d (server) found virtual connection: virtual_fd=%d -> replacing with real_fd=%d (conn_id=%lu)\n",
-                       router_id, virtual_server_fd, socket_fd, connection_id);
+                printf("[DESD] R%d (server) Plan P matched virtual connection: virtual_fd=%d -> replacing with real_fd=%d (conn_id=%lu, real_peer=R%d)\n",
+                       router_id, matched_virtual_fd, socket_fd, matched_connection_id, real_peer_router_id);
                 
                 // 替换虚拟 fd 为真实 fd
                 router_states[router_id].connections[i].socket_fd = socket_fd;
@@ -3027,11 +3034,11 @@ void handle_connection_info_event(Event event) {
                     for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
                         if (router_states[client_router_id].connections[j].is_active &&
                             router_states[client_router_id].connections[j].socket_fd == peer_socket_fd &&
-                            router_states[client_router_id].connections[j].connection_id == connection_id) {
+                            router_states[client_router_id].connections[j].connection_id == matched_connection_id) {
                             
                             router_states[client_router_id].connections[j].peer_socket_fd = socket_fd;
                             printf("[DESD] R%d (client) peer_socket_fd updated: %d -> %d\n",
-                                   client_router_id, virtual_server_fd, socket_fd);
+                                   client_router_id, matched_virtual_fd, socket_fd);
                             // 调试：成功更新后 dump server/client 双侧映射
                             dump_router_connections(router_id, "CONN_INFO_SERVER_AFTER");
                             dump_router_connections(client_router_id, "CONN_INFO_CLIENT_AFTER");
@@ -3044,26 +3051,52 @@ void handle_connection_info_event(Event event) {
                 int updated_packets = 0;
                 for (int j = 0; j < MAX_PENDING_PACKETS; j++) {
                     if (router_states[router_id].packet_buffers[j].is_used &&
-                        router_states[router_id].packet_buffers[j].socket_fd == virtual_server_fd) {
+                        router_states[router_id].packet_buffers[j].socket_fd == matched_virtual_fd) {
                         router_states[router_id].packet_buffers[j].socket_fd = socket_fd;
                         updated_packets++;
                     }
                 }
                 if (updated_packets > 0) {
                     printf("[DESD] R%d (server) updated %d buffered packet(s): socket_fd %d -> %d\n",
-                           router_id, updated_packets, virtual_server_fd, socket_fd);
+                           router_id, updated_packets, matched_virtual_fd, socket_fd);
                 }
                 
                 printf("[DESD] R%d (server) connection updated: real_fd=%d <-> R%d (client) fd=%d (conn_id=%lu).\n",
-                       router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
+                       router_id, socket_fd, client_router_id, peer_socket_fd, matched_connection_id);
                 
-                // 🔑 新增：检查 client 是否已经先关闭了
+                // 🔑 方案 P 新增：从 pending_connections 队列中删除该连接（按 connection_id 查找，非 FIFO）
+                int removed_from_pending = 0;
+                for (int p = 0; p < MAX_PENDING_PACKETS; p++) {
+                    int idx = (router_states[router_id].pending_conn_head + p) % MAX_PENDING_PACKETS;
+                    if (p >= router_states[router_id].pending_connections_count) break;
+                    if (router_states[router_id].pending_connections[idx].connection_id == matched_connection_id) {
+                        // 找到了，需要从队列中移除（通过将后面的元素前移）
+                        for (int k = p; k < router_states[router_id].pending_connections_count - 1; k++) {
+                            int curr_idx = (router_states[router_id].pending_conn_head + k) % MAX_PENDING_PACKETS;
+                            int next_idx = (router_states[router_id].pending_conn_head + k + 1) % MAX_PENDING_PACKETS;
+                            router_states[router_id].pending_connections[curr_idx] = router_states[router_id].pending_connections[next_idx];
+                        }
+                        router_states[router_id].pending_connections_count--;
+                        // 调整 tail 指针
+                        router_states[router_id].pending_conn_tail = (router_states[router_id].pending_conn_head + router_states[router_id].pending_connections_count) % MAX_PENDING_PACKETS;
+                        removed_from_pending = 1;
+                        printf("[DESD] R%d Plan P: removed conn_id=%lu from pending_connections, remaining=%d\n",
+                               router_id, matched_connection_id, router_states[router_id].pending_connections_count);
+                        break;
+                    }
+                }
+                if (!removed_from_pending) {
+                    printf("[DESD WARNING] R%d Plan P: conn_id=%lu not found in pending_connections queue\n",
+                           router_id, matched_connection_id);
+                }
+                
+                // 🔑 检查 client 是否已经先关闭了
                 // 如果 client 在 server 完成 CONNECTION_INFO 前就 close 了，
                 // 需要标记 server 侧的 peer_closed=1，这样后续发包时会返回 "Peer connection closed" 而不是 "Invalid connection mapping"
-                if (client_router_id > 0 && check_client_already_closed(connection_id, client_router_id)) {
+                if (client_router_id > 0 && check_client_already_closed(matched_connection_id, client_router_id)) {
                     router_states[router_id].connections[i].peer_closed = 1;
                     printf("[DESD-PEER-CLOSED] R%d (server) conn_id=%lu: client R%d already closed before CONNECTION_INFO completed. Marked peer_closed=1.\n",
-                           router_id, connection_id, client_router_id);
+                           router_id, matched_connection_id, client_router_id);
                 }
                 
                 break;
@@ -3071,32 +3104,30 @@ void handle_connection_info_event(Event event) {
         }
         
         if (!found_virtual_connection) {
-            // 如果没找到虚拟连接，说明出现了异常情况
-            // 尝试通过 connection_id 查找 client 端连接
-            printf("[DESD WARNING] R%d (server) virtual connection not found for conn_id=%lu, virtual_fd=%d. Searching for client connection...\n",
-                   router_id, connection_id, virtual_server_fd);
+            // 方案 P：如果没找到虚拟连接，说明出现了异常情况
+            // 可能是 real_peer_router_id 没有对应的虚拟连接
+            printf("[DESD WARNING] R%d (server) Plan P: no virtual connection found for real_peer_router_id=%d. Attempting fallback...\n",
+                   router_id, real_peer_router_id);
 
             // 调试：dump 当前 server 侧连接表，便于后续分析
             dump_router_connections(router_id, "CONN_INFO_SERVER_NO_VIRTUAL");
             
-            for (int rid = 1; rid <= MAX_ROUTERS; rid++) {
-                if (rid == router_id || router_states[rid].thread_count == 0) continue;
-                
+            // 尝试通过 real_peer_router_id 在 client 端连接表中查找
+            if (real_peer_router_id > 0 && real_peer_router_id <= MAX_ROUTERS) {
                 for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
-                    if (router_states[rid].connections[i].is_active &&
-                        router_states[rid].connections[i].connection_id == connection_id &&
-                        router_states[rid].connections[i].peer_router_id == router_id) {
+                    if (router_states[real_peer_router_id].connections[i].is_active &&
+                        router_states[real_peer_router_id].connections[i].peer_router_id == router_id) {
                         
-                        client_router_id = rid;
-                        peer_socket_fd = router_states[rid].connections[i].socket_fd;
-                        router_states[rid].connections[i].peer_socket_fd = socket_fd;
-                        printf("[CONN-ID-MATCH] R%d (server) fd=%d MATCHED with R%d (client) fd=%d using conn_id=%lu\n",
-                               router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
-                        dump_router_connections(rid, "CONN_INFO_CLIENT_USING_CONN_ID");
+                        client_router_id = real_peer_router_id;
+                        peer_socket_fd = router_states[real_peer_router_id].connections[i].socket_fd;
+                        matched_connection_id = router_states[real_peer_router_id].connections[i].connection_id;
+                        router_states[real_peer_router_id].connections[i].peer_socket_fd = socket_fd;
+                        printf("[PLAN-P-FALLBACK] R%d (server) fd=%d MATCHED with R%d (client) fd=%d using real_peer_router_id\n",
+                               router_id, socket_fd, client_router_id, peer_socket_fd);
+                        dump_router_connections(real_peer_router_id, "CONN_INFO_CLIENT_FALLBACK");
                         break;
                     }
                 }
-                if (client_router_id != -1) break;
             }
             
             // 作为备用方案，注册新的服务器端连接
@@ -3104,13 +3135,13 @@ void handle_connection_info_event(Event event) {
             for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
                 if (router_states[router_id].connections[i].is_active &&
                     router_states[router_id].connections[i].socket_fd == socket_fd) {
-                    router_states[router_id].connections[i].connection_id = connection_id;
+                    router_states[router_id].connections[i].connection_id = matched_connection_id;
                     break;
                 }
             }
             
-            printf("[DESD] R%d (server) registered NEW connection (fallback): fd %d <-> R%d (client) fd %d (conn_id=%lu).\n",
-                   router_id, socket_fd, client_router_id, peer_socket_fd, connection_id);
+            printf("[DESD] R%d (server) Plan P registered NEW connection (fallback): fd %d <-> R%d (client) fd %d.\n",
+                   router_id, socket_fd, client_router_id, peer_socket_fd);
             if (client_router_id > 0 && client_router_id <= MAX_ROUTERS) {
                 dump_router_connections(client_router_id, "CONN_INFO_CLIENT_FALLBACK_AFTER");
             }
@@ -3513,23 +3544,17 @@ void handle_router_block_request(Event event) {
                 }
             }
         } else if (strcmp(blocked_func_str_local, "ACCEPT_CALL") == 0) {
-            // 特殊处理 ACCEPT_CALL：从 FIFO 队列取出 pending 连接
+            // 方案 P：ACCEPT_CALL 只检查是否有 pending 连接，不出队/不绑定具体 connection_id
+            // 真正的绑定在 CONNECTION_INFO_EVENT 中根据 real_peer_router_id 后验匹配完成
             if (router_states[router_id].pending_connections_count > 0) {
-                // 从FIFO队列头部取出客户端信息
-                int head = router_states[router_id].pending_conn_head;
-                int client_rid = router_states[router_id].pending_connections[head].client_router_id;
-                int client_fd = router_states[router_id].pending_connections[head].client_socket_fd;
-                unsigned long conn_id = router_states[router_id].pending_connections[head].connection_id;
-                router_states[router_id].pending_conn_head = (head + 1) % MAX_PENDING_PACKETS;
-                router_states[router_id].pending_connections_count--;
-                
                 // 只有当线程确实被这个 BLOCK_REQUEST 阻塞时才改 status
                 if (ti->status == BLOCKED && strcmp(ti->blocked_on_request_id, request_id_local) == 0) {
                     ti->status = RUNNING;
                     ti->blocked_on_request_id[0] = '\0';
                 }
                 
-                // 在响应中返回connection_id和client信息
+                // 返回简单的 SUCCESS 响应，不包含具体连接信息
+                // libdeshook 将在 real_accept() 成功后通过 CONNECTION_INFO_EVENT 报告真实 peer
                 Message accept_resp;
                 memset(&accept_resp, 0, sizeof(Message));
                 accept_resp.message_type = DESD_TO_HOOK;
@@ -3542,9 +3567,7 @@ void handle_router_block_request(Event event) {
                 json_object_set_new(resp_payload, "status", json_string("SUCCESS"));
                 json_object_set_new(resp_payload, "function", json_string("ACCEPT"));
                 json_object_set_new(resp_payload, "message", json_string("Connection Available"));
-                json_object_set_new(resp_payload, "connection_id", json_integer(conn_id));
-                json_object_set_new(resp_payload, "client_router_id", json_integer(client_rid));
-                json_object_set_new(resp_payload, "client_socket_fd", json_integer(client_fd));
+                json_object_set_new(resp_payload, "pending_count", json_integer(router_states[router_id].pending_connections_count));
                 char *resp_str = json_dumps(resp_payload, JSON_COMPACT);
                 strncpy(accept_resp.payload.json_str, resp_str, MAX_MSG_SIZE - 1);
                 accept_resp.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
@@ -3553,8 +3576,8 @@ void handle_router_block_request(Event event) {
                 
                 send_message_to_router(router_id, &accept_resp);
                 
-                printf("[DESD] R%d accept() immediately unblocked from R%d(fd:%d), conn_id=%lu, remaining pending=%d\n", 
-                       router_id, client_rid, client_fd, conn_id, router_states[router_id].pending_connections_count);
+                printf("[DESD] R%d accept() unblocked (Plan P): pending_count=%d, will match by real_peer in CONNECTION_INFO_EVENT\n", 
+                       router_id, router_states[router_id].pending_connections_count);
             } else {
                 // 连接还没建立，保持阻塞
                 ti->status = BLOCKED;

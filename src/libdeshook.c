@@ -1091,35 +1091,36 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
             if (resp_payload_obj) json_decref(resp_payload_obj);
             
             // 2. DESD解除阻塞后，调用真实的accept()
-            // 使用重试机制处理 EAGAIN：虚拟时间认为连接已到达，但真实内核可能还没把连接放入 backlog
-            printf("[LIBDESHOOK-DEBUG] R%d calling real_accept() on sockfd=%d...\n", my_router_id, sockfd);
+            // 阻塞语义：无限循环直到成功或硬错误，EAGAIN/EWOULDBLOCK/EINTR 只在内部重试
+            printf("[LIBDESHOOK-DEBUG] R%d calling real_accept() on sockfd=%d (blocking semantics)...\n", my_router_id, sockfd);
             fflush(stdout);
             
             int new_fd = -1;
             int saved_errno = 0;
-            int accept_max_retries = 10;      // 最多重试 10 次
-            int accept_wait_ms = 10;          // 每次等待 10ms，总共最多 100ms
+            int accept_wait_ms = 50;          // 每次 poll 等待 50ms
+            int retry_count = 0;
             
-            for (int retry = 0; retry < accept_max_retries; retry++) {
+            while (1) {
                 new_fd = real_accept(sockfd, addr, addrlen);
                 saved_errno = errno;
                 
                 if (new_fd >= 0) {
                     // 成功拿到新连接
-                    printf("[LIBDESHOOK-DEBUG] R%d real_accept() succeeded on retry %d: new_fd=%d\n",
-                           my_router_id, retry, new_fd);
+                    printf("[LIBDESHOOK-DEBUG] R%d real_accept() succeeded after %d retries: new_fd=%d\n",
+                           my_router_id, retry_count, new_fd);
                     fflush(stdout);
                     break;
                 }
                 
                 // new_fd < 0，检查 errno
-                if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK) {
-                    // 软错误：暂时没有连接，等一等再试
-                    if (retry == 0) {
-                        printf("[LIBDESHOOK-DEBUG] R%d real_accept() returned EAGAIN, entering retry loop (max=%d, wait=%dms each)\n",
-                               my_router_id, accept_max_retries, accept_wait_ms);
+                if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK || saved_errno == EINTR) {
+                    // 软错误：暂时没有连接或被信号中断，阻塞等待后重试
+                    if (retry_count == 0) {
+                        printf("[LIBDESHOOK-DEBUG] R%d real_accept() returned %s, entering blocking retry loop\n",
+                               my_router_id, saved_errno == EINTR ? "EINTR" : "EAGAIN");
                         fflush(stdout);
                     }
+                    retry_count++;
                     
                     // 用 poll 在监听 socket 上等待 POLLIN
                     struct pollfd pfd;
@@ -1130,7 +1131,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                     int poll_ret = real_poll(&pfd, 1, accept_wait_ms);
                     
                     if (poll_ret < 0 && errno != EINTR) {
-                        // poll 出错（非信号中断），视为硬错误
+                        // poll 出错（非信号中断），视为硬错误，跳出循环
                         saved_errno = errno;
                         fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() failed during accept retry: errno=%d (%s)\n",
                                 my_router_id, saved_errno, strerror(saved_errno));
@@ -1140,27 +1141,29 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                     
                     // poll_ret == 0: 超时，继续重试
                     // poll_ret > 0: 有数据，继续重试 accept
+                    // poll_ret < 0 && errno == EINTR: 被信号中断，继续重试
                     continue;
                 } else {
                     // 硬错误（ECONNABORTED, EBADF, EMFILE 等），不再重试
-                    fprintf(stderr, "[LIBDESHOOK ERROR] R%d real_accept() hard error on retry %d: errno=%d (%s)\n",
-                            my_router_id, retry, saved_errno, strerror(saved_errno));
+                    fprintf(stderr, "[LIBDESHOOK ERROR] R%d real_accept() hard error after %d retries: errno=%d (%s)\n",
+                            my_router_id, retry_count, saved_errno, strerror(saved_errno));
                     fflush(stderr);
                     break;
                 }
             }
             
-            printf("[LIBDESHOOK-DEBUG] R%d real_accept() final result: new_fd=%d, errno=%d (%s)\n", 
-                   my_router_id, new_fd, saved_errno, new_fd < 0 ? strerror(saved_errno) : "success");
+            printf("[LIBDESHOOK-DEBUG] R%d real_accept() final result: new_fd=%d, errno=%d (%s), total_retries=%d\n", 
+                   my_router_id, new_fd, saved_errno, new_fd < 0 ? strerror(saved_errno) : "success", retry_count);
             fflush(stdout);
             
             if (new_fd < 0) {
-                // 重试后仍然失败，通知 DESD 清理这条虚拟连接
-                fprintf(stderr, "[LIBDESHOOK ERROR] R%d real_accept() FAILED after retries on sockfd=%d: errno=%d (%s)\n",
+                // 硬错误（非 EAGAIN/EWOULDBLOCK/EINTR）导致 accept 失败，通知 DESD 清理虚拟连接
+                // 注意：EAGAIN 等软错误在上面的 while 循环中无限重试，不会走到这里
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d real_accept() HARD ERROR on sockfd=%d: errno=%d (%s)\n",
                         my_router_id, sockfd, saved_errno, strerror(saved_errno));
                 fflush(stderr);
                 
-                // 通知 DESD 这次 accept 失败，清理对应的虚拟连接
+                // 通知 DESD 这次 accept 失败（硬错误），清理对应的虚拟连接
                 Message accept_fail;
                 memset(&accept_fail, 0, sizeof(Message));
                 accept_fail.message_type = HOOK_TO_DESD;
@@ -1193,6 +1196,8 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                 return new_fd;  // accept 失败，返回 -1
             }
 
+            // 方案 P：从 getpeername() 获取真实 peer 信息，用于后验匹配
+            int real_peer_router_id = -1;  // 将传递给 DESD 的 CONNECTION_INFO_EVENT
             {
                 struct sockaddr_storage peer_addr;
                 socklen_t peer_len = sizeof(peer_addr);
@@ -1203,23 +1208,22 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                         char peer_ip[INET_ADDRSTRLEN];
                         const char *ntop_ret = inet_ntop(AF_INET, &(peer_in->sin_addr), peer_ip, sizeof(peer_ip));
                         int peer_port = ntohs(peer_in->sin_port);
-                        int derived_peer_rid = -1;
                         int o1 = 0, o2 = 0, o3 = 0, o4 = 0;
                         if (ntop_ret && sscanf(peer_ip, "%d.%d.%d.%d", &o1, &o2, &o3, &o4) == 4 &&
                             o1 == 10 && o2 == 0 && o3 == o4 && o3 > 0 && o3 < 256) {
-                            derived_peer_rid = o3;
+                            real_peer_router_id = o3;
                         }
                         printf("[LIBDESHOOK-ACCEPT-PEER] R%d accept() conn_id=%lu expected_peer=R%d real_peer=%s:%d derived_peer=R%d new_fd=%d listen_fd=%d\n",
                                my_router_id, connection_id, client_router_id,
                                ntop_ret ? peer_ip : "<inet_ntop_failed>",
-                               peer_port, derived_peer_rid, new_fd, sockfd);
+                               peer_port, real_peer_router_id, new_fd, sockfd);
                         fflush(stdout);
-                        if (derived_peer_rid > 0 && client_router_id > 0 && derived_peer_rid != client_router_id) {
+                        if (real_peer_router_id > 0 && client_router_id > 0 && real_peer_router_id != client_router_id) {
                             fprintf(stderr,
                                     "[LIBDESHOOK-ACCEPT-MISMATCH] R%d conn_id=%lu expected_peer=R%d BUT real_peer=%s:%d derived_peer=R%d (new_fd=%d listen_fd=%d)\n",
                                     my_router_id, connection_id, client_router_id,
                                     ntop_ret ? peer_ip : "<inet_ntop_failed>",
-                                    peer_port, derived_peer_rid, new_fd, sockfd);
+                                    peer_port, real_peer_router_id, new_fd, sockfd);
                             fflush(stderr);
                         }
                     } else {
@@ -1257,14 +1261,16 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
             json_object_set_new(conn_payload_obj, "listen_fd", json_integer(sockfd));
             json_object_set_new(conn_payload_obj, "connection_id", json_integer(connection_id));
             json_object_set_new(conn_payload_obj, "request_id", json_string(conn_info.request_id));
+            // 方案 P：添加 real_peer_router_id，用于 DESD 后验匹配
+            json_object_set_new(conn_payload_obj, "real_peer_router_id", json_integer(real_peer_router_id));
             char *conn_payload_str = json_dumps(conn_payload_obj, JSON_COMPACT);
             strncpy(conn_info.payload.json_str, conn_payload_str, MAX_MSG_SIZE - 1);
             conn_info.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
             free(conn_payload_str);
             json_decref(conn_payload_obj);
             
-            printf("[LIBDESHOOK-DEBUG] R%d sending CONNECTION_INFO_EVENT to DESD (req_id=%s, new_fd=%d, conn_id=%lu)...\n",
-                   my_router_id, conn_info.request_id, new_fd, connection_id);
+            printf("[LIBDESHOOK-DEBUG] R%d sending CONNECTION_INFO_EVENT to DESD (req_id=%s, new_fd=%d, conn_id=%lu, real_peer=R%d)...\n",
+                   my_router_id, conn_info.request_id, new_fd, connection_id, real_peer_router_id);
             fflush(stdout);
             
             printf("[LIBDESHOOK-DEBUG] R%d sending CONNECTION_INFO_EVENT (req_id=%s) for conn_id=%lu\n", 
