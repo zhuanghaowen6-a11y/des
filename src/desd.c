@@ -88,9 +88,6 @@ typedef struct {
     // 按行拆包缓冲区：解决 AF_UNIX 流式 socket 的粘包/半包问题
     char recv_buf[RECV_BUF_SIZE];       // 接收缓冲区
     size_t recv_len;                    // 缓冲区中有效字节数
-    // DETACHED_WAITING 状态：线程已脱离 DES 阻塞控制，等待其重新 hook 回来
-    int detached_waiting;               // 1 表示正在等待该线程重新 hook
-    double detached_since_vt;           // 进入 DETACHED_WAITING 时的虚拟时间
     // 方案二：用于跟踪当前在事件队列中属于该线程的事件数量
     int pending_event_count;            // 队列中屚于该线程的活跃事件数
 } ThreadInfo;
@@ -126,11 +123,6 @@ static volatile int registration_thread_running = 0;
 
 // 保护 router_states 的 mutex（用于 registration thread 与 event loop 之间的同步）
 static pthread_mutex_t router_states_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-// DETACHED_WAITING 全局状态：跟踪有多少线程处于等待重新 hook 的状态
-static int num_detached_waiting = 0;           // 当前处于 DETACHED_WAITING 的线程数
-static double first_detached_vt = 0.0;         // 第一个线程进入 DETACHED_WAITING 时的 VT
-#define DETACHED_WAIT_TIMEOUT_SEC 10           // 等待 DETACHED 线程重新 hook 的真实时间超时（秒）
 
 // 心跳日志计数器（全局，便于在退出时统计）
 static unsigned long heartbeat_event_counter = 0;
@@ -253,9 +245,6 @@ static ThreadInfo* register_thread(int router_id, int thread_id, int comm_fd) {
     // 初始化接收缓冲区
     ti->recv_len = 0;
     memset(ti->recv_buf, 0, sizeof(ti->recv_buf));
-    // 初始化 DETACHED_WAITING 状态
-    ti->detached_waiting = 0;
-    ti->detached_since_vt = 0.0;
     // 方案二：初始化 pending_event_count
     ti->pending_event_count = 0;
     
@@ -1125,9 +1114,16 @@ void push_event(Event new_event) {
 
 Event pop_event() {
     pthread_mutex_lock(&event_queue_mutex);
-    while (event_queue_size == 0) {
-        // 等待新事件的到来
-        pthread_cond_wait(&event_queue_cond, &event_queue_mutex);
+    
+    // ===== 不变量 I2：事件队列不应为空 =====
+    // 在 DES 语义下，合法系统的事件队列永远不应为空
+    // 如果队列为空，说明存在 bug（线程未正确产生下一个事件）
+    if (event_queue_size == 0) {
+        fprintf(stderr, "[DESD FATAL] pop_event: Event queue is empty! This violates invariant I2.\n");
+        fprintf(stderr, "  current_virtual_time = %.6f\n", current_virtual_time);
+        fprintf(stderr, "  This indicates a bug: active thread did not generate next event.\n");
+        pthread_mutex_unlock(&event_queue_mutex);
+        exit(1);
     }
 
     Event root = event_queue[0];
@@ -1301,13 +1297,10 @@ const char* event_type_to_string(EventType type) {
 
 // --- 新架构核心函数 ---
 
-// Forward declaration
-void wait_for_detached_threads_to_rehook();
-
 // drain_all_messages_nonblocking: 在每次 pop_event 之前调用
 // 非阻塞地扫描所有线程的 socket，将到达的消息转换为事件入队
-// - 所有消息类型（包括 GET_VIRTUAL_TIME_EVENT）统一入队，由主事件循环处理
-// - 如果线程处于 DETACHED_WAITING 状态，收到任何消息都表示它已重新 hook
+// 新架构：drain 只应该收到 CANCEL_BLOCK_REQUEST 和 mutex 即时消息
+// 其他消息类型表示架构假设被破坏，会打印警告日志
 void drain_all_messages_nonblocking() {
     struct pollfd poll_fds[MAX_ROUTERS * MAX_THREADS_PER_ROUTER];
     int fd_to_router[MAX_ROUTERS * MAX_THREADS_PER_ROUTER];
@@ -1400,22 +1393,13 @@ void drain_all_messages_nonblocking() {
                 pthread_mutex_lock(&router_states_mutex);
                 ti = get_thread_info(router_id, thread_id);
                 RouterStatus thread_status = ti ? ti->status : IDLE;
-                
-                // 如果该线程处于 DETACHED_WAITING 状态，收到任何消息意味着它已经重新 hook 回来
-                if (ti && ti->detached_waiting) {
-                    ti->detached_waiting = 0;
-                    num_detached_waiting--;
-                    printf("[DESD-DETACH] R%d T%d re-hooked at VT=%.3f with %s (remaining detached: %d)\n",
-                           router_id, thread_id, current_virtual_time, 
-                           event_type_to_string(msg.event_type), num_detached_waiting);
-                }
                 pthread_mutex_unlock(&router_states_mutex);
                 
                 // 根据消息类型和线程状态分类处理
                 if (msg.event_type == CANCEL_BLOCK_REQUEST) {
-                    // ===== 方案二: CANCEL 入队处理 =====
-                    // 这样可以保证 CANCEL 事件在对应的 BLOCK 事件之后被处理，消除竞态条件
-                    // handle_cancel_block_request 会根据 pending_event_count 决定是否进入 DETACHED_WAITING
+                    // ===== 同步 CANCEL 协议：CANCEL 入队处理 =====
+                    // CANCEL 事件入队后，由 handle_cancel_block_request 处理
+                    // 新架构：handle_cancel_block_request 会发送 CANCELLED 响应给 libdeshook
                     Event cancel_event = {
                         .timestamp = current_virtual_time,
                         .router_id = router_id,
@@ -1429,8 +1413,12 @@ void drain_all_messages_nonblocking() {
                            router_id, thread_id, msg.request_id, current_virtual_time, cancel_event.event_id);
                     
                 } else if (msg.event_type == GET_VIRTUAL_TIME_EVENT) {
-                    // GET_VIRTUAL_TIME: 统一入队处理，由主事件循环分发到 handle_get_virtual_time_event
-                    // 重要：GETVT 也是阻塞型 RPC，线程在等 DESD 回复期间是 BLOCKED 状态
+                    // ===== 警告：GETVT 不应该在 drain 阶段收到 =====
+                    // 新架构下，GETVT 应该在 interact 阶段由 active thread 发送
+                    fprintf(stderr, "[DESD-DRAIN WARNING] R%d T%d sent GET_VIRTUAL_TIME_EVENT in drain phase (unexpected). ReqID: %s, VT=%.3f\n",
+                            router_id, thread_id, msg.request_id, current_virtual_time);
+                    
+                    // 仍然处理以避免线程死锁，但这表示架构假设被破坏
                     Event vt_event = {
                         .timestamp = current_virtual_time,
                         .router_id = router_id,
@@ -1441,7 +1429,6 @@ void drain_all_messages_nonblocking() {
                     };
                     push_event(vt_event);
                     
-                    // 标记线程为 BLOCKED，等待 GETVT 事件被处理并回复
                     pthread_mutex_lock(&router_states_mutex);
                     ti = get_thread_info(router_id, thread_id);
                     if (ti) {
@@ -1451,15 +1438,13 @@ void drain_all_messages_nonblocking() {
                     }
                     pthread_mutex_unlock(&router_states_mutex);
                     
-                    printf("[DESD-DRAIN] R%d T%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), marked BLOCKED, queued at VT=%.3f.\n",
-                           router_id, thread_id, msg.request_id, current_virtual_time);
-                    
                 } else if (msg.event_type == ROUTER_BLOCK_REQUEST) {
-                    // ===== ROUTER_BLOCK_REQUEST 特殊处理：只入队，不改 status =====
-                    // 原因：handle_router_block_request 会根据是否有 ready fd/pending packet 等
-                    // 决定是"立即唤醒"（status 保持 RUNNING）还是"真正阻塞"（status 改为 BLOCKED）。
-                    // 如果在 drain 阶段预先标记为 BLOCKED，会导致"立即唤醒"的 BLOCK 被视为
-                    // BLOCKED->RUNNING 转换，从而错误地触发 interact_with_router_until_it_blocks。
+                    // ===== 警告：ROUTER_BLOCK_REQUEST 不应该在 drain 阶段收到 =====
+                    // 新架构下，BLOCK 应该在 interact 阶段由 active thread 发送
+                    fprintf(stderr, "[DESD-DRAIN WARNING] R%d T%d sent ROUTER_BLOCK_REQUEST in drain phase (unexpected). ReqID: %s, status=%d, VT=%.3f\n",
+                            router_id, thread_id, msg.request_id, thread_status, current_virtual_time);
+                    
+                    // 仍然处理以避免线程死锁
                     Event block_event = {
                         .timestamp = current_virtual_time,
                         .router_id = router_id,
@@ -1470,17 +1455,18 @@ void drain_all_messages_nonblocking() {
                     };
                     push_event(block_event);
                     
-                    const char* status_desc = (thread_status == RUNNING_DETACHED) ? "was DETACHED" : 
-                                             (thread_status == RUNNING) ? "was RUNNING" :
+                    const char* status_desc = (thread_status == RUNNING) ? "was RUNNING" :
                                              (thread_status == IDLE) ? "was IDLE" : "unknown status";
                     printf("[DESD-DRAIN] R%d T%d (%s) sent ROUTER_BLOCK_REQUEST (ReqID: %s), queued at VT=%.3f (EventID: %lu). Status NOT changed.\n",
                            router_id, thread_id, status_desc, msg.request_id, current_virtual_time, block_event.event_id);
                     
                 } else if (msg.event_type == PACKET_SEND_EVENT ||
-                           msg.event_type == CONNECT_REQUEST_EVENT ||
-                           thread_status == RUNNING_DETACHED) {
-                    // 阻塞类请求（包括来自 RUNNING_DETACHED 线程的"重新 hook"请求）
-                    // 构造 Event 入队，标记线程为 BLOCKED
+                           msg.event_type == CONNECT_REQUEST_EVENT) {
+                    // ===== 警告：PACKET_SEND/CONNECT_REQUEST 不应该在 drain 阶段收到 =====
+                    fprintf(stderr, "[DESD-DRAIN WARNING] R%d T%d sent %s in drain phase (unexpected). ReqID: %s, status=%d, VT=%.3f\n",
+                            router_id, thread_id, event_type_to_string(msg.event_type), msg.request_id, thread_status, current_virtual_time);
+                    
+                    // 仍然处理以避免线程死锁
                     double event_timestamp = current_virtual_time;
                     if (msg.event_type == PACKET_SEND_EVENT) {
                         event_timestamp = current_virtual_time + 0.002;
@@ -1495,20 +1481,18 @@ void drain_all_messages_nonblocking() {
                         .payload = msg.payload
                     };
                     
-                    // 记录线程正在等待的请求，标记为 BLOCKED
                     pthread_mutex_lock(&router_states_mutex);
                     ti = get_thread_info(router_id, thread_id);
                     if (ti) {
                         strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                         ti->blocked_on_request_id[63] = '\0';
-                        ti->status = BLOCKED; // 标记为 BLOCKED，等待事件被 pop 时处理
+                        ti->status = BLOCKED;
                     }
                     pthread_mutex_unlock(&router_states_mutex);
                     
                     push_event(new_event);
                     
-                    const char* status_desc = (thread_status == RUNNING_DETACHED) ? "was DETACHED" : 
-                                             (thread_status == RUNNING) ? "was RUNNING" :
+                    const char* status_desc = (thread_status == RUNNING) ? "was RUNNING" :
                                              (thread_status == IDLE) ? "was IDLE" : "unknown status";
                     printf("[DESD-DRAIN] R%d T%d (%s) sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f (EventID: %lu).\n",
                            router_id, thread_id, status_desc, event_type_to_string(msg.event_type),
@@ -1517,7 +1501,11 @@ void drain_all_messages_nonblocking() {
                 } else if (msg.event_type == LISTEN_EVENT ||
                            msg.event_type == CONNECTION_INFO_EVENT ||
                            msg.event_type == CLOSE_SOCKET_EVENT) {
-                    // LISTEN/CONNECTION_INFO/CLOSE_SOCKET 也是阻塞型 RPC，需要标记 BLOCKED
+                    // ===== 警告：LISTEN/CONNECTION_INFO/CLOSE_SOCKET 不应该在 drain 阶段收到 =====
+                    fprintf(stderr, "[DESD-DRAIN WARNING] R%d T%d sent %s in drain phase (unexpected). ReqID: %s, status=%d, VT=%.3f\n",
+                            router_id, thread_id, event_type_to_string(msg.event_type), msg.request_id, thread_status, current_virtual_time);
+                    
+                    // 仍然处理以避免线程死锁
                     Event instant_event = {
                         .timestamp = current_virtual_time,
                         .router_id = router_id,
@@ -1528,7 +1516,6 @@ void drain_all_messages_nonblocking() {
                     };
                     push_event(instant_event);
                     
-                    // 标记线程为 BLOCKED，等待事件被处理并回复
                     pthread_mutex_lock(&router_states_mutex);
                     ti = get_thread_info(router_id, thread_id);
                     if (ti) {
@@ -1663,19 +1650,6 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
             }
             
             // 成功读取一条消息
-            pthread_mutex_lock(&router_states_mutex);
-            ti = get_thread_info(router_id, thread_id);
-            
-            // 如果该线程处于 DETACHED_WAITING 状态，收到任何消息意味着它已经重新 hook 回来
-            if (ti && ti->detached_waiting) {
-                ti->detached_waiting = 0;
-                num_detached_waiting--;
-                printf("[DESD-DETACH] R%d T%d re-hooked at VT=%.3f with %s (remaining detached: %d)\n",
-                       router_id, thread_id, current_virtual_time, 
-                       event_type_to_string(msg.event_type), num_detached_waiting);
-            }
-            pthread_mutex_unlock(&router_states_mutex);
-            
             // ===== 处理 active_thread 的消息 =====
             
             // CANCEL 入队处理，继续读取后续消息（不 return）
@@ -1839,200 +1813,9 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
     }  // end while(1) for interact loop
 }
 
-// wait_for_detached_threads_to_rehook: 等待所有 DETACHED_WAITING 线程重新 hook 回来
-// 语义：DETACHED 期间的操作在 VT 上是“瞬时”的，在线程重新 hook 之前不应该推进 VT
-// 这个函数会阻塞等待，直到所有 DETACHED_WAITING 线程都发送了新消息
-void wait_for_detached_threads_to_rehook() {
-    if (num_detached_waiting <= 0) {
-        return;  // 没有需要等待的线程
-    }
-    
-    struct pollfd poll_fds[MAX_ROUTERS * MAX_THREADS_PER_ROUTER];
-    int fd_to_router[MAX_ROUTERS * MAX_THREADS_PER_ROUTER];
-    int fd_to_thread[MAX_ROUTERS * MAX_THREADS_PER_ROUTER];
-    
-    time_t start_time = time(NULL);
-    
-    while (num_detached_waiting > 0) {
-        int poll_count = 0;
-        
-        // 收集所有 DETACHED_WAITING 线程的 socket fd
-        pthread_mutex_lock(&router_states_mutex);
-        for (int r = 1; r <= MAX_ROUTERS; r++) {
-            for (int t = 0; t < MAX_THREADS_PER_ROUTER; t++) {
-                ThreadInfo *ti = &router_states[r].threads[t];
-                if (ti->is_active && ti->detached_waiting && ti->comm_socket_fd >= 0) {
-                    poll_fds[poll_count].fd = ti->comm_socket_fd;
-                    poll_fds[poll_count].events = POLLIN;
-                    poll_fds[poll_count].revents = 0;
-                    fd_to_router[poll_count] = r;
-                    fd_to_thread[poll_count] = t;
-                    printf("[DESD-DETACH-WAIT DEBUG] tracking R%d T%d fd=%d as DETACHED_WAITING (since VT=%.3f)\n",
-                           r, t, ti->comm_socket_fd, ti->detached_since_vt);
-                    poll_count++;
-                }
-            }
-        }
-        pthread_mutex_unlock(&router_states_mutex);
-        
-        if (poll_count == 0) {
-            // 没有找到 DETACHED_WAITING 线程，但 num_detached_waiting > 0，可能是计数器不一致
-            fprintf(stderr, "[DESD-DETACH-WAIT WARNING] num_detached_waiting=%d but no DETACHED_WAITING threads found. Resetting counter.\n",
-                    num_detached_waiting);
-            num_detached_waiting = 0;
-            return;
-        }
-        
-        printf("[DESD-DETACH-WAIT] Waiting for %d DETACHED_WAITING thread(s) at VT=%.3f...\n",
-               poll_count, current_virtual_time);
-        
-        // 检查是否超时（真实时间）
-        time_t elapsed = time(NULL) - start_time;
-        if (elapsed >= DETACHED_WAIT_TIMEOUT_SEC) {
-            fprintf(stderr, "[DESD-DETACH-WAIT ERROR] Timeout after %ld seconds waiting for DETACHED threads to re-hook at VT=%.3f.\n",
-                    (long)elapsed, current_virtual_time);
-            fprintf(stderr, "[DESD-DETACH-WAIT ERROR] The following threads are still DETACHED_WAITING:\n");
-            pthread_mutex_lock(&router_states_mutex);
-            for (int r = 1; r <= MAX_ROUTERS; r++) {
-                for (int t = 0; t < MAX_THREADS_PER_ROUTER; t++) {
-                    ThreadInfo *ti = &router_states[r].threads[t];
-                    if (ti->is_active && ti->detached_waiting) {
-                        fprintf(stderr, "  - R%d T%d: detached since VT=%.3f\n",
-                                r, t, ti->detached_since_vt);
-                    }
-                }
-            }
-            pthread_mutex_unlock(&router_states_mutex);
-            fprintf(stderr, "[DESD-DETACH-WAIT ERROR] This indicates a logic error: thread(s) detached but never re-hooked.\n");
-            fprintf(stderr, "[DESD-DETACH-WAIT ERROR] Exiting simulation to prevent infinite stall.\n");
-            fprintf(stderr, "[DESD-EXIT] Reason: DETACHED thread timeout (waited %d seconds). VT=%.3f, ProcessedEvents=%lu. Code=1\n",
-                    DETACHED_WAIT_TIMEOUT_SEC, current_virtual_time, heartbeat_event_counter);
-            exit(1);
-        }
-        
-        // 阻塞等待（每次最多 1 秒，便于定期检查超时）
-        int poll_result = poll(poll_fds, poll_count, 1000);
-        
-        if (poll_result < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            perror("[DESD-DETACH-WAIT ERROR] poll failed");
-            continue;
-        }
-        
-        if (poll_result == 0) {
-            // 1 秒内没有数据，继续等待
-            continue;
-        }
-        
-        printf("[DESD-DETACH-WAIT DEBUG] poll() reported %d ready fd(s) among %d tracked DETACHED_WAITING thread(s).\n",
-               poll_result, poll_count);
-        
-        // 处理所有有数据的 fd
-        for (int i = 0; i < poll_count; i++) {
-            if (!(poll_fds[i].revents & POLLIN)) {
-                continue;
-            }
-            
-            int router_id = fd_to_router[i];
-            int thread_id = fd_to_thread[i];
-            
-            pthread_mutex_lock(&router_states_mutex);
-            ThreadInfo *ti = get_thread_info(router_id, thread_id);
-            pthread_mutex_unlock(&router_states_mutex);
-            
-            if (!ti) {
-                continue;
-            }
-            
-            printf("[DESD-DETACH-WAIT DEBUG] POLLIN for R%d T%d (fd=%d), calling read_one_json_message()...\n",
-                   router_id, thread_id, ti->comm_socket_fd);
-            
-            // 方案一：循环读取同一 fd 上所有完整 JSON 消息
-            while (1) {
-                Message msg;
-                int read_result = read_one_json_message(ti, MSG_DONTWAIT, &msg);
-                
-                if (read_result < 0) {
-                    // 连接断开
-                    fprintf(stderr, "[DESD-DETACH-WAIT ERROR] R%d T%d disconnected while waiting for re-hook.\n",
-                            router_id, thread_id);
-                    pthread_mutex_lock(&router_states_mutex);
-                    ti = get_thread_info(router_id, thread_id);
-                    if (ti) {
-                        if (ti->detached_waiting) {
-                            ti->detached_waiting = 0;
-                            num_detached_waiting--;
-                        }
-                        ti->comm_socket_fd = -1;
-                        ti->status = IDLE;
-                        ti->is_active = 0;
-                        ti->recv_len = 0;
-                    }
-                    pthread_mutex_unlock(&router_states_mutex);
-                    break;  // 连接断开，退出此 fd 的循环
-                } else if (read_result == 0) {
-                    // 没有完整消息，退出此 fd 的循环
-                    break;
-                }
-                
-                // 成功读取消息，清除 DETACHED_WAITING 状态
-                pthread_mutex_lock(&router_states_mutex);
-                ti = get_thread_info(router_id, thread_id);
-                
-                if (ti && ti->detached_waiting) {
-                    ti->detached_waiting = 0;
-                    num_detached_waiting--;
-                    printf("[DESD-DETACH] R%d T%d re-hooked at VT=%.3f with %s (remaining detached: %d)\n",
-                           router_id, thread_id, current_virtual_time, 
-                           event_type_to_string(msg.event_type), num_detached_waiting);
-                }
-                pthread_mutex_unlock(&router_states_mutex);
-                
-                // 将消息统一处理为事件入队（包括 GET_VIRTUAL_TIME_EVENT）
-                double event_timestamp = current_virtual_time;
-                if (msg.event_type == PACKET_SEND_EVENT) {
-                    event_timestamp = current_virtual_time + 0.002;
-                }
-                
-                Event new_event = {
-                    .timestamp = event_timestamp,
-                    .router_id = router_id,
-                    .thread_id = thread_id,
-                    .event_type = msg.event_type,
-                    .event_id = generate_event_id(),
-                    .payload = msg.payload
-                };
-                
-                // 如果是阻塞类请求，标记线程为 BLOCKED
-                if (msg.event_type == ROUTER_BLOCK_REQUEST ||
-                    msg.event_type == PACKET_SEND_EVENT ||
-                    msg.event_type == CONNECT_REQUEST_EVENT) {
-                    pthread_mutex_lock(&router_states_mutex);
-                    ti = get_thread_info(router_id, thread_id);
-                    if (ti) {
-                        strncpy(ti->blocked_on_request_id, msg.request_id, 63);
-                        ti->blocked_on_request_id[63] = '\0';
-                        ti->status = BLOCKED;
-                    }
-                    pthread_mutex_unlock(&router_states_mutex);
-                }
-                
-                push_event(new_event);
-                printf("[DESD-DETACH-WAIT] R%d T%d sent %s (ReqID: %s), queued at VT=%.3f.\n",
-                       router_id, thread_id, event_type_to_string(msg.event_type),
-                       msg.request_id, event_timestamp);
-            }  // end while(1) for this fd
-        }
-    }
-    
-    printf("[DESD-DETACH-WAIT] All DETACHED threads have re-hooked. Continuing...\n");
-}
-
 // --- DESD Event Loop (Single-threaded, New Three-Phase Architecture) ---
 // 新架构保证：同一时刻只有一个路由器在 DES 控制下运行
-// 阶段 0: drain - 处理所有已到达的 CANCEL 和 DETACHED 线程的重新 hook 请求
+// 阶段 0: drain - 处理 CANCEL_BLOCK_REQUEST 和 mutex 即时消息（其他消息应打印警告）
 // 阶段 1: pop_event + handle_event - 取出并处理一个事件
 // 阶段 2: interact - 与 active_router 交互直到它再次阻塞
 // 心跳日志：每处理 HEARTBEAT_INTERVAL 个事件打印一次状态
@@ -2042,23 +1825,11 @@ void desd_event_loop() {
     printf("[DESD-HEARTBEAT] Event loop started. Will print heartbeat every %d events.\n", HEARTBEAT_INTERVAL);
     while (1) {
         // ===== 阶段 0: Drain 所有已到达的消息 =====
-        // 处理 CANCEL_BLOCK_REQUEST 和 RUNNING_DETACHED 线程的"重新 hook"请求
+        // 同步 CANCEL 协议：主要处理 CANCEL_BLOCK_REQUEST 和 mutex 即时消息
         drain_all_messages_nonblocking();
         
-        // ===== 关键检查：只要有线程处于 DETACHED_WAITING，就不处理任何事件 =====
-        // 语义：任何线程脱离 DES 控制时，整个事件循环暂停，直到所有线程重新 hook 回来
-        if (num_detached_waiting > 0) {
-            printf("[DESD-DETACH-WAIT] %d thread(s) are DETACHED_WAITING at VT=%.3f, pausing event processing...\n",
-                   num_detached_waiting, current_virtual_time);
-            
-            // 等待所有 DETACHED_WAITING 线程重新 hook 回来
-            wait_for_detached_threads_to_rehook();
-            
-            // 线程可能发送了新事件，重新 drain 后再开始下一轮循环
-            continue;
-        }
-        
         // ===== 阶段 1: Pop 事件并处理 =====
+        // 注意：DETACHED_WAITING 机制已移除，改用同步 CANCEL 协议
         printf("[DESD-DEBUG] Before pop_event: event_queue_size=%d, VT=%.3f\n",
                event_queue_size, current_virtual_time);
         Event current_event = pop_event(); // 如果队列为空，这里会阻塞
@@ -2095,11 +1866,11 @@ void desd_event_loop() {
         }
 
         // 调试限制：达到 MAX_TOTAL_EVENTS 个事件后停止
-        if (current_event.event_id >= MAX_TOTAL_EVENTS/6) {
+        if (current_event.event_id >= MAX_TOTAL_EVENTS/30) {
             printf("[DESD-STOP] Reached %d events limit (EventID: %lu). Stopping simulation.\n",
-                   MAX_TOTAL_EVENTS/6, current_event.event_id);
+                   MAX_TOTAL_EVENTS/30, current_event.event_id);
             printf("[DESD-EXIT] Reason: Event limit reached (%d). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
-                   MAX_TOTAL_EVENTS/6, current_virtual_time, heartbeat_event_counter);
+                   MAX_TOTAL_EVENTS/30, current_virtual_time, heartbeat_event_counter);
             exit(0);
         }
 
@@ -2149,15 +1920,10 @@ void desd_event_loop() {
             current_event.event_type == PACKET_SEND_EVENT ||
             current_event.event_type == CONNECT_REQUEST_EVENT
         );
-
-        int is_getvt_event = (current_event.event_type == GET_VIRTUAL_TIME_EVENT);
         
-        // CANCEL_BLOCK_REQUEST 特殊处理：
-        // CANCEL 导致的 BLOCKED->RUNNING 不应触发 interact，因为：
-        // 1. 线程取消阻塞后会在应用侧本地运行一段时间，不受 DES 控制
-        // 2. 线程后续的 re-hook（如 LISTEN/新 BLOCK）已经在队列中排队等待处理
-        // 3. 如果此时进入 interact，会卡死等待一个不会再发 DES 请求的线程
-        int is_cancel_event = (current_event.event_type == CANCEL_BLOCK_REQUEST);
+        // CANCEL_BLOCK_REQUEST 现在被视为一种正常的“解除阻塞”事件：
+        // handle_cancel_block_request 会将线程从 BLOCKED 置为 RUNNING，并发送 CANCELLED 响应。
+        // 是否进入 interact 由通用条件 (BLOCKED -> RUNNING) 决定，这里不再对 CANCEL 做特殊排除。
 
         // 方案 A 配合：
         // - ROUTER_START 的 SUCCESS 现在在 handle_router_start 中发送
@@ -2170,7 +1936,7 @@ void desd_event_loop() {
             status_after_event == RUNNING
         );
 
-        int should_wait_for_router = !is_cancel_event && (
+        int should_wait_for_router = (
             (status_before_event == BLOCKED && status_after_event == RUNNING) || // 路由器解除阻塞
             is_initial_start ||                                                 // 首次 ROUTER_START: IDLE -> RUNNING
             (is_router_initiated_event && status_after_event == RUNNING)        // 处理了路由器主动发起的事件
@@ -2300,15 +2066,15 @@ void handle_router_start(Event event) {
         // 保守策略：
         // - 只有在线程处于 IDLE 时才将其置为 RUNNING（首次启动）
         // - 如果线程已经是 BLOCKED，说明它已经向 DESD 发送过阻塞请求并在等待响应，
-        //   此时不应该被 ROUTER_START 事件"解锁"，否则会打乱状态机并导致死锁。
-        // - 如果线程已经是 RUNNING 或 RUNNING_DETACHED，则忽略重复的 ROUTER_START。
+        //   此时不应该被 ROUTER_START 事件“解锁”，否则会打乱状态机并导致死锁。
+        // - 如果线程已经是 RUNNING，则忽略重复的 ROUTER_START。
         if (old_status == IDLE) {
             ti->status = RUNNING;
             printf("[DESD] R%d T%d is now RUNNING (was IDLE).\n", router_id, thread_id);
         } else if (old_status == BLOCKED) {
             printf("[DESD] R%d T%d received ROUTER_START but is already BLOCKED (keeping BLOCKED).\n",
                    router_id, thread_id);
-        } else if (old_status == RUNNING || old_status == RUNNING_DETACHED) {
+        } else if (old_status == RUNNING) {
             printf("[DESD] R%d T%d received duplicate ROUTER_START (status=%d), ignoring.\n",
                    router_id, thread_id, old_status);
         }
@@ -4422,14 +4188,12 @@ void handle_timeout_event(Event event) {
 
 // Handle CANCEL_BLOCK_REQUEST - 取消之前的阻塞请求（本地fd提前ready时使用）
 //
-// 【协议说明】CANCEL_BLOCK_REQUEST 是一个 one-way 通知：
-//   - libdeshook 端使用 fire-and-forget 方式发送（send_cancel_block_request），不等待响应
-//   - DESD 端只做本地状态更新（取消 timeout、清除阻塞状态），不发送 DESD_TO_HOOK 响应
-//   - 这样设计是因为：libdeshook 发送 CANCEL 时，应用线程已经因为本地 fd ready 而继续执行了，
-//     不会再阻塞等待 DESD 的任何响应；发送响应只会产生"陈旧响应"被后续 RPC 丢弃。
+// 【协议说明 - 同步 CANCEL RPC】：
+//   - libdeshook 发送 CANCEL_BLOCK_REQUEST 后，会阻塞等待 DESD 的 CANCELLED 响应
+//   - DESD 收到后：清理阻塞状态、取消 timeout、设为 RUNNING，然后发送 CANCELLED 响应
+//   - 不变量 C：CANCEL 必定命中（线程发送 CANCEL 时，对应 block 请求尚未被处理）
+//   - 如果未命中（状态不一致），视为严重 bug，直接 fatal exit
 //
-// 新架构下，libdeshook可以同时监听desd_fd和本地fd，如果本地fd先ready，
-// 需要发送CANCEL_BLOCK_REQUEST取消之前发送给DESD的阻塞请求
 void handle_cancel_block_request(Event event) {
     int router_id = event.router_id;
     int thread_id = event.thread_id;
@@ -4438,15 +4202,15 @@ void handle_cancel_block_request(Event event) {
     json_error_t error;
     json_t *payload_obj = json_loads(event.payload.json_str, 0, &error);
     if (!payload_obj) {
-        fprintf(stderr, "[DESD ERROR] handle_cancel_block_request: Failed to parse payload JSON.\n");
-        return;
+        fprintf(stderr, "[DESD FATAL] handle_cancel_block_request: Failed to parse payload JSON. Exiting.\n");
+        exit(1);
     }
     
     const char *request_id_ptr = json_string_value(json_object_get(payload_obj, "request_id"));
     if (!request_id_ptr) {
-        fprintf(stderr, "[DESD ERROR] handle_cancel_block_request: No request_id in payload.\n");
+        fprintf(stderr, "[DESD FATAL] handle_cancel_block_request: No request_id in payload. Exiting.\n");
         json_decref(payload_obj);
-        return;
+        exit(1);
     }
     
     char request_id_local[64];
@@ -4460,64 +4224,65 @@ void handle_cancel_block_request(Event event) {
     // 获取线程信息
     ThreadInfo *ti = get_thread_info(router_id, thread_id);
     if (!ti) {
-        fprintf(stderr, "[DESD ERROR] handle_cancel_block_request: Thread R%d T%d not found.\n", router_id, thread_id);
-        return;
+        fprintf(stderr, "[DESD FATAL] handle_cancel_block_request: Thread R%d T%d not found. Exiting.\n", router_id, thread_id);
+        exit(1);
     }
     
-    // 检查线程是否被阻塞在这个request_id上
-    if (ti->status == BLOCKED && strcmp(ti->blocked_on_request_id, request_id_local) == 0) {
-        // 取消pending的TIMEOUT_EVENT（这会在 cancel_event 中减少 pending_event_count）
-        if (ti->pending_timeout_event_id > 0) {
-            cancel_event(ti->pending_timeout_event_id);
-            printf("[DESD-CANCEL] Canceled pending timeout event %lu for R%d T%d.\n",
-                   ti->pending_timeout_event_id, router_id, thread_id);
-            ti->pending_timeout_event_id = 0;
-        }
-        
-        // 清理阻塞相关状态
-        memset(ti->blocked_on_request_id, 0, 64);
-        memset(ti->blocked_on_function, 0, 64);
-        ti->monitored_fds_count = 0;
-        
-        // ===== 方案二核心判断：根据 pending_event_count 决定是否进入 DETACHED_WAITING =====
-        // 此时 pending_event_count 的含义：
-        //   - 这次 CANCEL 事件本身已在 pop_event 后减过一次
-        //   - 刚才 cancel 掉的 TIMEOUT_EVENT 也在 cancel_event 中减过一次
-        //   - 所以剩余的 pending_event_count 只包含"除了这次 BLOCK/TIMEOUT 之外的其它事件"
-        //     比如：LISTEN, CONNECT_REQUEST, 新的 ROUTER_BLOCK_REQUEST 等
-        
-        if (ti->pending_event_count == 0) {
-            // 没有其它未来事件：线程真的要"脱离 DES 控制"了
-            ti->status = RUNNING_DETACHED;
-            if (!ti->detached_waiting) {
-                ti->detached_waiting = 1;
-                ti->detached_since_vt = current_virtual_time;
-                num_detached_waiting++;
-                if (num_detached_waiting == 1) {
-                    first_detached_vt = current_virtual_time;
-                }
-                printf("[DESD-DETACH] R%d T%d entered DETACHED_WAITING at VT=%.3f (pending_event_count=0, total detached: %d)\n",
-                       router_id, thread_id, current_virtual_time, num_detached_waiting);
-            }
-            printf("[DESD-CANCEL] R%d T%d block request %s cancelled, now RUNNING_DETACHED (no future events).\n",
-                   router_id, thread_id, request_id_local);
-        } else {
-            // 仍有其它事件排队（例如 LISTEN）
-            // 说明线程已经/即将通过新的 RPC/阻塞请求重新受 DES 管理
-            // 这次 CANCEL 只是"废弃旧的 block + timeout"，不应进入 DETACHED_WAITING
-            ti->status = RUNNING;
-            printf("[DESD-CANCEL] R%d T%d block request %s cancelled, now RUNNING (pending_event_count=%d, has future events).\n",
-                   router_id, thread_id, request_id_local, ti->pending_event_count);
-        }
-    } else {
-        // 线程不在阻塞状态，或者阻塞在其他request_id上
-        printf("[DESD-CANCEL] R%d T%d cancel request ignored (status=%d, blocked_on=%s, cancel_req=%s).\n",
-               router_id, thread_id, ti->status, ti->blocked_on_request_id, request_id_local);
+    // ===== 不变量 C：CANCEL 必定命中 =====
+    // 线程发送 CANCEL(request_id) 时，意味着：
+    //   - 线程仍在等待 DESD 对该 request_id 的响应
+    //   - DESD 尚未处理对应的 TIMEOUT 或唤醒事件
+    // 因此，此处必须满足：ti->status == BLOCKED && ti->blocked_on_request_id == request_id
+    // 如果不满足，说明状态机存在 bug，直接 fatal exit
+    if (ti->status != BLOCKED || strcmp(ti->blocked_on_request_id, request_id_local) != 0) {
+        fprintf(stderr, "[DESD FATAL] handle_cancel_block_request: Invariant C violated!\n");
+        fprintf(stderr, "  Expected: status=BLOCKED, blocked_on_request_id=%s\n", request_id_local);
+        fprintf(stderr, "  Actual:   status=%d, blocked_on_request_id=%s\n", ti->status, ti->blocked_on_request_id);
+        fprintf(stderr, "  Thread: R%d T%d, VT=%.6f\n", router_id, thread_id, current_virtual_time);
+        exit(1);
     }
     
-    // 【重要】不发送 DESD_TO_HOOK 响应：
-    // CANCEL 是 one-way 通知，libdeshook 端不会等待响应。
-    // 如果发送响应，只会在后续 RPC 中被当作"陈旧响应"丢弃，增加不必要的噪音。
+    // 命中：清理阻塞状态
+    // 取消pending的TIMEOUT_EVENT（这会在 cancel_event 中减少 pending_event_count）
+    if (ti->pending_timeout_event_id > 0) {
+        cancel_event(ti->pending_timeout_event_id);
+        printf("[DESD-CANCEL] Canceled pending timeout event %lu for R%d T%d.\n",
+               ti->pending_timeout_event_id, router_id, thread_id);
+        ti->pending_timeout_event_id = 0;
+    }
+    
+    // 清理阻塞相关状态
+    memset(ti->blocked_on_request_id, 0, 64);
+    memset(ti->blocked_on_function, 0, 64);
+    ti->monitored_fds_count = 0;
+    
+    // 状态转为 RUNNING
+    ti->status = RUNNING;
+    printf("[DESD-CANCEL] R%d T%d block request %s cancelled, now RUNNING.\n",
+           router_id, thread_id, request_id_local);
+    
+    // ===== 发送 CANCELLED 响应给 libdeshook =====
+    // 同步 CANCEL 协议：libdeshook 在发送 CANCEL 后阻塞等待此响应
+    json_t *resp_payload = json_object();
+    json_object_set_new(resp_payload, "status", json_string("CANCELLED"));
+    char *resp_payload_str = json_dumps(resp_payload, JSON_COMPACT);
+    json_decref(resp_payload);
+    
+    Message response;
+    memset(&response, 0, sizeof(Message));
+    response.message_type = DESD_TO_HOOK;
+    response.router_id = router_id;
+    response.thread_id = thread_id;
+    strncpy(response.request_id, request_id_local, 63);
+    response.request_id[63] = '\0';
+    response.virtual_time = current_virtual_time;
+    strncpy(response.payload.json_str, resp_payload_str, MAX_MSG_SIZE - 1);
+    response.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+    free(resp_payload_str);
+    
+    send_message_to_thread(router_id, thread_id, &response);
+    printf("[DESD-CANCEL] Sent CANCELLED response to R%d T%d for request %s.\n",
+           router_id, thread_id, request_id_local);
 }
 
 // --- Helper Functions for sending specific responses ---

@@ -1878,12 +1878,50 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         
     } else if (local_ready_count > 0) {
         // 本地fd先ready，DESD还没响应
-        // 发送CANCEL_BLOCK_REQUEST取消之前的阻塞请求（fire-and-forget）
-        // 注意：不等待响应，因为DESD可能正阻塞在event queue上，无法立即回复
-        // 稍后的recv操作会处理可能的stale响应
+        // ===== 同步 CANCEL 协议 =====
+        // 发送 CANCEL_BLOCK_REQUEST 并等待 DESD 的 CANCELLED 响应
+        // 确保 DESD 已清理内部阻塞状态后再返回给应用
+        printf("[LIBDESHOOK-CANCEL] R%d T%d local fd ready first, sending sync CANCEL for req=%s\n",
+               my_router_id, get_current_thread_id(), saved_request_id);
+        
         send_cancel_block_request(saved_request_id);
         
-        // 设置返回值
+        // 阻塞等待 DESD 的 CANCELLED 响应
+        Message cancel_response;
+        memset(&cancel_response, 0, sizeof(Message));
+        if (!recv_msg_from_desd_matching(saved_request_id, &cancel_response)) {
+            fprintf(stderr, "[LIBDESHOOK ERROR] R%d T%d failed to receive CANCELLED response for req=%s\n",
+                    my_router_id, get_current_thread_id(), saved_request_id);
+            free(kernel_fds);
+            if (non_des_fds) free(non_des_fds);
+            if (non_des_orig_idx) free(non_des_orig_idx);
+            errno = ECOMM;
+            return -1;
+        }
+        
+        // 验证响应状态
+        json_error_t json_err;
+        json_t *cancel_payload = json_loads(cancel_response.payload.json_str, 0, &json_err);
+        const char *cancel_status = cancel_payload ? 
+            json_string_value(json_object_get(cancel_payload, "status")) : NULL;
+        
+        if (!cancel_status || strcmp(cancel_status, "CANCELLED") != 0) {
+            fprintf(stderr, "[LIBDESHOOK ERROR] R%d T%d expected CANCELLED response, got status=%s for req=%s\n",
+                    my_router_id, get_current_thread_id(), 
+                    cancel_status ? cancel_status : "NULL", saved_request_id);
+            if (cancel_payload) json_decref(cancel_payload);
+            free(kernel_fds);
+            if (non_des_fds) free(non_des_fds);
+            if (non_des_orig_idx) free(non_des_orig_idx);
+            errno = ECOMM;
+            return -1;
+        }
+        if (cancel_payload) json_decref(cancel_payload);
+        
+        printf("[LIBDESHOOK-CANCEL] R%d T%d received CANCELLED response for req=%s, returning local ready\n",
+               my_router_id, get_current_thread_id(), saved_request_id);
+        
+        // DESD 已确认取消，现在安全地返回本地 ready 结果
         for (nfds_t i = 0; i < nfds; i++) {
             fds[i].revents = 0;
         }
