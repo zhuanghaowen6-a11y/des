@@ -54,7 +54,6 @@ typedef enum {
 
 typedef enum {
     RUNNING,           // 路由器正在执行，处于 DESD 控制下
-    RUNNING_DETACHED,  // 路由器正在执行，但已脱离 DESD 控制（因 CANCEL 或本地 fd ready）
     BLOCKED,           // 路由器已阻塞，等待 DESD 解除阻塞
     IDLE               // 路由器无事可做，等待新事件
 } RouterStatus;
