@@ -84,6 +84,7 @@ typedef struct {
     int monitored_fds[64];              // 监听的fd数组
     int monitored_fds_events[64];       // 对应的事件类型
     int monitored_fds_count;            // 监听的fd数量
+    int blocked_on_socket_fd;           // RECV_CALL阻塞时等待的socket fd（-1表示未阻塞在recv上）
     int is_active;                      // 线程是否活跃
     // 按行拆包缓冲区：解决 AF_UNIX 流式 socket 的粘包/半包问题
     char recv_buf[RECV_BUF_SIZE];       // 接收缓冲区
@@ -241,6 +242,7 @@ static ThreadInfo* register_thread(int router_id, int thread_id, int comm_fd) {
     ti->status = IDLE;
     ti->is_active = 1;
     ti->monitored_fds_count = 0;
+    ti->blocked_on_socket_fd = -1;
     ti->pending_timeout_event_id = 0;
     memset(ti->blocked_on_request_id, 0, sizeof(ti->blocked_on_request_id));
     memset(ti->blocked_on_function, 0, sizeof(ti->blocked_on_function));
@@ -291,6 +293,39 @@ static ThreadInfo* find_any_blocked_thread(int router_id) {
         ThreadInfo *ti = &router_states[router_id].threads[i];
         if (ti->is_active && ti->status == BLOCKED) {
             return ti;
+        }
+    }
+    return NULL;
+}
+
+// 查找阻塞在RECV_CALL上且等待指定socket_fd的线程
+static ThreadInfo* find_blocked_recv_thread_by_fd(int router_id, int socket_fd) {
+    if (router_id <= 0 || router_id > MAX_ROUTERS) return NULL;
+    for (int i = 0; i < MAX_THREADS_PER_ROUTER; i++) {
+        ThreadInfo *ti = &router_states[router_id].threads[i];
+        if (ti->is_active && ti->status == BLOCKED &&
+            strcmp(ti->blocked_on_function, "RECV_CALL") == 0 &&
+            ti->blocked_on_socket_fd == socket_fd) {
+            return ti;
+        }
+    }
+    return NULL;
+}
+
+// 查找阻塞在SELECT_CALL上且监控指定socket_fd(POLLIN)的线程
+static ThreadInfo* find_blocked_select_thread_by_fd(int router_id, int socket_fd) {
+    if (router_id <= 0 || router_id > MAX_ROUTERS) return NULL;
+    for (int i = 0; i < MAX_THREADS_PER_ROUTER; i++) {
+        ThreadInfo *ti = &router_states[router_id].threads[i];
+        if (ti->is_active && ti->status == BLOCKED &&
+            strcmp(ti->blocked_on_function, "SELECT_CALL") == 0) {
+            // 检查该线程的monitored_fds是否包含socket_fd且监听POLLIN
+            for (int j = 0; j < ti->monitored_fds_count; j++) {
+                if (ti->monitored_fds[j] == socket_fd &&
+                    (ti->monitored_fds_events[j] & 0x001)) {  // POLLIN = 0x001
+                    return ti;
+                }
+            }
         }
     }
     return NULL;
@@ -3244,6 +3279,7 @@ void handle_router_block_request(Event event) {
                     ti->status = RUNNING;
                     ti->blocked_on_request_id[0] = '\0';
                 }
+                ti->blocked_on_socket_fd = -1;  // RECV完成，清除阻塞的socket fd
                 
                 // 从队列中移除找到的buffer（压缩队列）
                 int head = router_states[router_id].pending_buffer_head;
@@ -3325,6 +3361,7 @@ void handle_router_block_request(Event event) {
                         ti->status = RUNNING;
                         ti->blocked_on_request_id[0] = '\0';
                     }
+                    ti->blocked_on_socket_fd = -1;  // RECV完成(EOF)，清除阻塞的socket fd
                     
                     json_t *resp_payload = json_object();
                     json_object_set_new(resp_payload, "status", json_string("EOF"));
@@ -3366,8 +3403,9 @@ void handle_router_block_request(Event event) {
                     ti->blocked_on_request_id[63] = '\0';
                     strncpy(ti->blocked_on_function, blocked_func_str_local, 63);
                     ti->blocked_on_function[63] = '\0';
-                    printf("[DESD] R%d blocked on %s (ReqID: %s) - no pending packets.\n",
-                           router_id, blocked_func_str_local, request_id_local);
+                    ti->blocked_on_socket_fd = socket_fd;  // 记录RECV阻塞等待的socket fd
+                    printf("[DESD] R%d T%d blocked on %s (ReqID: %s, fd:%d) - no pending packets.\n",
+                           router_id, thread_id, blocked_func_str_local, request_id_local, socket_fd);
                 }
             }
         } else if (strcmp(blocked_func_str_local, "ACCEPT_CALL") == 0) {
@@ -3949,13 +3987,33 @@ void handle_packet_receive_event(Event event) {
     json_decref(payload_obj);
 
     if (target_router_id > 0 && target_router_id <= MAX_ROUTERS) {
-        printf("[DESD] R%d received PACKET_RECEIVE_EVENT for %s.\n",
-               target_router_id, destination_abstract_address);
+        // 先获取数据包对应的socket_fd，用于精确选择要唤醒的线程
+        int packet_socket_fd = -1;
+        if (buffer_index >= 0 && buffer_index < MAX_PENDING_PACKETS &&
+            router_states[target_router_id].packet_buffers[buffer_index].is_used) {
+            packet_socket_fd = router_states[target_router_id].packet_buffers[buffer_index].socket_fd;
+        }
+        
+        printf("[DESD] R%d received PACKET_RECEIVE_EVENT for %s (buffer_index=%d, packet_socket_fd=%d).\n",
+               target_router_id, destination_abstract_address, buffer_index, packet_socket_fd);
 
-        // 查找阻塞在 RECV_CALL 或 SELECT_CALL 上的线程
-        ThreadInfo *blocked_ti = find_blocked_thread(target_router_id, "RECV_CALL");
-        if (!blocked_ti) {
-            blocked_ti = find_blocked_thread(target_router_id, "SELECT_CALL");
+        // 精确查找阻塞线程：优先找等待该socket_fd的RECV线程，其次找监控该fd的SELECT线程
+        ThreadInfo *blocked_ti = NULL;
+        if (packet_socket_fd >= 0) {
+            // 情况A：数据到达已accept的正常fd
+            blocked_ti = find_blocked_recv_thread_by_fd(target_router_id, packet_socket_fd);
+            if (!blocked_ti) {
+                blocked_ti = find_blocked_select_thread_by_fd(target_router_id, packet_socket_fd);
+            }
+        } else {
+            // 情况B：数据到达虚拟fd（server端还没accept的连接）
+            // 需要找一个监控listening fd且有pending connection的SELECT线程
+            if (router_states[target_router_id].pending_connections_count > 0) {
+                for (int li = 0; li < router_states[target_router_id].listen_count && !blocked_ti; li++) {
+                    int listen_fd = router_states[target_router_id].listening_socket_fds[li];
+                    blocked_ti = find_blocked_select_thread_by_fd(target_router_id, listen_fd);
+                }
+            }
         }
         
         if (blocked_ti && blocked_ti->blocked_on_request_id[0] != '\0') {
@@ -3971,6 +4029,7 @@ void handle_packet_receive_event(Event event) {
                 blocked_ti->status = RUNNING;
                 memset(blocked_ti->blocked_on_request_id, 0, 64);
                 memset(blocked_ti->blocked_on_function, 0, 64);
+                blocked_ti->blocked_on_socket_fd = -1;  // 清除RECV阻塞的socket fd
                 
                 // 从缓冲区读取数据并发送给路由器
                 if (buffer_index >= 0 && buffer_index < MAX_PENDING_PACKETS &&
@@ -4005,71 +4064,33 @@ void handle_packet_receive_event(Event event) {
                 
                 printf("[DESD] R%d T%d was blocked on recv and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, blocked_ti->thread_id, destination_abstract_address);
             } else if (strcmp(blocked_func, "SELECT_CALL") == 0) {
-                // 情况1b：接收方在 select 上等待，需要检查数据包是否匹配监听的fd
+                // 情况1b：接收方在 select 上等待
+                // 注意：此时blocked_ti已经是通过find_blocked_select_thread_by_fd找到的正确线程
+                // 该线程的monitored_fds一定包含packet_socket_fd（或listening fd对于虚拟fd情况）
                 char request_id[64];
                 strncpy(request_id, blocked_ti->blocked_on_request_id, 63);
                 request_id[63] = '\0';
                 
-                // 获取新到达数据包对应的socket_fd
-                int packet_socket_fd = -1;
-                if (buffer_index >= 0 && buffer_index < MAX_PENDING_PACKETS &&
-                    router_states[target_router_id].packet_buffers[buffer_index].is_used) {
-                    packet_socket_fd = router_states[target_router_id].packet_buffers[buffer_index].socket_fd;
-                }
-                
-                // 检查这个socket_fd是否在select()监听的fd集合中，且监听了POLLIN事件
-                int should_wakeup = 0;
-                int wakeup_listen_fd = -1;  // 如果通过监听fd唤醒，记录该fd
-                
-                if (packet_socket_fd >= 0) {
-                    // 情况A：数据到达已accept的正常fd
+                // 对于虚拟fd情况，找出对应的listening fd
+                int wakeup_listen_fd = -1;
+                if (packet_socket_fd < 0) {
+                    // 数据到达虚拟fd，需要找出是哪个listening fd触发的唤醒
                     for (int i = 0; i < blocked_ti->monitored_fds_count; i++) {
-                        if (blocked_ti->monitored_fds[i] == packet_socket_fd &&
-                            (blocked_ti->monitored_fds_events[i] & 0x001)) { // POLLIN
-                            should_wakeup = 1;
-                            break;
-                        }
-                    }
-                } else {
-                    // 情况B：数据到达虚拟fd（server端还没accept的连接）
-                    // 按照真实内核语义，此时应该把监听fd标为ready（因为有pending connection）
-                    // 这样router被唤醒后会先accept，拿到真实fd，然后再recv数据
-                    if (router_states[target_router_id].pending_connections_count > 0) {
-                        // 检查monitored_fds中是否有监听fd且监听了POLLIN
-                        for (int i = 0; i < blocked_ti->monitored_fds_count; i++) {
-                            int mon_fd = blocked_ti->monitored_fds[i];
-                            int mon_events = blocked_ti->monitored_fds_events[i];
-                            
-                            // 检查这个fd是否是监听socket
-                            for (int j = 0; j < router_states[target_router_id].listen_count; j++) {
-                                if (router_states[target_router_id].listening_socket_fds[j] == mon_fd &&
-                                    (mon_events & 0x001)) { // POLLIN
-                                    should_wakeup = 1;
-                                    wakeup_listen_fd = mon_fd;
-                                    printf("[DESD] R%d: data arrived on virtual fd %d, mapping to listening fd %d (pending_connections=%d)\n",
-                                           target_router_id, packet_socket_fd, mon_fd, 
-                                           router_states[target_router_id].pending_connections_count);
-                                    break;
-                                }
+                        int mon_fd = blocked_ti->monitored_fds[i];
+                        for (int j = 0; j < router_states[target_router_id].listen_count; j++) {
+                            if (router_states[target_router_id].listening_socket_fds[j] == mon_fd) {
+                                wakeup_listen_fd = mon_fd;
+                                printf("[DESD] R%d: data arrived on virtual fd %d, mapping to listening fd %d (pending_connections=%d)\n",
+                                       target_router_id, packet_socket_fd, mon_fd, 
+                                       router_states[target_router_id].pending_connections_count);
+                                break;
                             }
-                            if (should_wakeup) break;
                         }
+                        if (wakeup_listen_fd >= 0) break;
                     }
                 }
                 
-                if (!should_wakeup) {
-                    // 数据包不匹配监听的fd，只加入pending队列，不唤醒路由器
-                    router_states[target_router_id].pending_packets_count++;
-                    int tail = router_states[target_router_id].pending_buffer_tail;
-                    router_states[target_router_id].pending_buffer_indices[tail] = buffer_index;
-                    router_states[target_router_id].pending_buffer_tail = (tail + 1) % MAX_PENDING_PACKETS;
-                    printf("[DESD] R%d has %d pending packet(s) (data arrived on fd:%d but not monitored by select, pending_connections=%d, currently blocked on SELECT_CALL).\n", 
-                           target_router_id, router_states[target_router_id].pending_packets_count, packet_socket_fd,
-                           router_states[target_router_id].pending_connections_count);
-                    return; // 不唤醒，直接返回
-                }
-                
-                // 数据包匹配监听的fd，取消超时事件并唤醒
+                // 数据包匹配监听的fd（已在find_blocked_select_thread_by_fd中验证），取消超时事件并唤醒
                 if (blocked_ti->pending_timeout_event_id > 0) {
                     cancel_event(blocked_ti->pending_timeout_event_id);
                     printf("[DESD] Canceled timeout event %lu for R%d (data arrived before timeout).\n",
@@ -4161,14 +4182,14 @@ void handle_packet_receive_event(Event event) {
                 printf("[DESD] R%d T%d was blocked on select and now awakened by PACKET_RECEIVE_EVENT for %s (buffer_index=%d added to pending queue, %zu unique FDs).\n", 
                        target_router_id, blocked_ti->thread_id, destination_abstract_address, buffer_index, ready_fds_count);
             } else {
-                // 其他阻塞类型，记录为 pending
+                // 其他阻塞类型（理论上不应到达此分支，因为我们只找RECV/SELECT线程），记录为 pending
                 router_states[target_router_id].pending_packets_count++;
                 // 将 buffer_index 加入 pending 队列
                 int tail = router_states[target_router_id].pending_buffer_tail;
                 router_states[target_router_id].pending_buffer_indices[tail] = buffer_index;
                 router_states[target_router_id].pending_buffer_tail = (tail + 1) % MAX_PENDING_PACKETS;
                 printf("[DESD] R%d has %d pending packet(s) (data arrived but currently blocked on %s).\n", 
-                       target_router_id, router_states[target_router_id].pending_packets_count, blocked_func);
+                       target_router_id, router_states[target_router_id].pending_packets_count, blocked_ti->blocked_on_function);
             }
         } else {
             // 情况2：接收方还没调用recv()或select()，记录数据已到达
@@ -4224,6 +4245,7 @@ void handle_timeout_event(Event event) {
         timeout_ti->status = RUNNING;
         memset(timeout_ti->blocked_on_request_id, 0, 64);
         memset(timeout_ti->blocked_on_function, 0, 64);
+        timeout_ti->blocked_on_socket_fd = -1;  // 超时完成，清除阻塞的socket fd
         
         // 清除超时事件ID
         if (timeout_ti->pending_timeout_event_id == event.event_id) {
@@ -4316,6 +4338,7 @@ void handle_cancel_block_request(Event event) {
     memset(ti->blocked_on_request_id, 0, 64);
     memset(ti->blocked_on_function, 0, 64);
     ti->monitored_fds_count = 0;
+    ti->blocked_on_socket_fd = -1;  // 取消阻塞，清除socket fd
     
     // 状态转为 RUNNING
     ti->status = RUNNING;
