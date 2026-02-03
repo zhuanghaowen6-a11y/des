@@ -110,6 +110,8 @@ typedef struct {
     int pending_buffer_indices[MAX_PENDING_PACKETS];
     int pending_buffer_head;
     int pending_buffer_tail;
+    int select_wakeup_pending;
+    int select_wakeup_thread_id;
 } RouterInfo;
 
 RouterInfo router_states[MAX_ROUTERS + 1]; // router_id 从 1 开始
@@ -1866,11 +1868,11 @@ void desd_event_loop() {
         }
 
         // 调试限制：达到 MAX_TOTAL_EVENTS 个事件后停止
-        if (current_event.event_id >= MAX_TOTAL_EVENTS/30) {
+        if (current_event.event_id >= MAX_TOTAL_EVENTS/6) {
             printf("[DESD-STOP] Reached %d events limit (EventID: %lu). Stopping simulation.\n",
-                   MAX_TOTAL_EVENTS/30, current_event.event_id);
+                   MAX_TOTAL_EVENTS/6, current_event.event_id);
             printf("[DESD-EXIT] Reason: Event limit reached (%d). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
-                   MAX_TOTAL_EVENTS/30, current_virtual_time, heartbeat_event_counter);
+                   MAX_TOTAL_EVENTS/6, current_virtual_time, heartbeat_event_counter);
             exit(0);
         }
 
@@ -1903,7 +1905,19 @@ void desd_event_loop() {
         // ===== 阶段 2: 与 active_router 交互直到它再次阻塞 =====
         // 判断是否需要等待该路由器的下一个事件
         RouterStatus status_after_event = thread_info ? thread_info->status : IDLE;
-        
+
+        // 特殊情况：CONNECTION_ESTABLISHED_EVENT 唤醒了在 SELECT 上阻塞的线程
+        // 这类事件的 event.thread_id 可能不是被唤醒的线程，因此由 handler 记录
+        // router_states[router_id].select_wakeup_thread_id 来指示真正需要进入
+        // interact 的线程。
+        int wakeup_thread_id = -1;
+        if (current_event.router_id > 0 && current_event.router_id <= MAX_ROUTERS) {
+            if (router_states[current_event.router_id].select_wakeup_pending) {
+                wakeup_thread_id = router_states[current_event.router_id].select_wakeup_thread_id;
+                router_states[current_event.router_id].select_wakeup_pending = 0;
+            }
+        }
+
         // 路由器主动发起的事件类型（不含 ROUTER_START，后者单独用 IDLE->RUNNING 判断）
         // 注意：GET_VIRTUAL_TIME_EVENT 不在此列表中，因为：
         // 1. GETVT 被建模为阻塞型 RPC：收到时线程标记为 BLOCKED，回复后改回 RUNNING
@@ -1911,14 +1925,17 @@ void desd_event_loop() {
         //    之后线程可能长时间只在应用侧执行 CPU/mutex 操作，而不再立即发起新的 DES 事件
         // 3. 如果此时进入 interact 并持续等待该线程的消息，而线程只发送 MUTEX_LOCK/UNLOCK 等瞬时事件，
         //    会导致 DESD 长时间停留在 interact 阶段，其他路由器事件得不到调度
-        // 注意：ROUTER_BLOCK_REQUEST 不再包含在 is_router_initiated_event 中
-        // 原因：ROUTER_BLOCK_REQUEST 可能"立即唤醒"（有 ready fd/pending packet），
-        // 此时 status 保持 RUNNING，如果触发 interact，而线程不再发 RPC，会导致死锁。
-        // handle_router_block_request 会在"真正阻塞"时将 status 改为 BLOCKED，
-        // 之后由其他事件（如 PACKET_RECEIVE/TIMEOUT）触发 BLOCKED->RUNNING 转换来进入 interact。
+        //
+        // ROUTER_BLOCK_REQUEST 也被视为路由器主动事件之一，但仍然配合 status_after_event 使用：
+        // - 如果 handle_router_block_request 让线程真正阻塞（status_after == BLOCKED），
+        //   则本次不会因为 is_router_initiated_event 而进入 interact；
+        // - 如果是"立即唤醒"（有 ready fd/pending packet），status_after 仍为 RUNNING，
+        //   满足 (is_router_initiated_event && status_after == RUNNING)，从而进入 interact，
+        //   避免后续 GETVT/其它 RPC 落到 drain 阶段。
         int is_router_initiated_event = (
             current_event.event_type == PACKET_SEND_EVENT ||
-            current_event.event_type == CONNECT_REQUEST_EVENT
+            current_event.event_type == CONNECT_REQUEST_EVENT ||
+            current_event.event_type == ROUTER_BLOCK_REQUEST
         );
         
         // CANCEL_BLOCK_REQUEST 现在被视为一种正常的“解除阻塞”事件：
@@ -1941,6 +1958,14 @@ void desd_event_loop() {
             is_initial_start ||                                                 // 首次 ROUTER_START: IDLE -> RUNNING
             (is_router_initiated_event && status_after_event == RUNNING)        // 处理了路由器主动发起的事件
         );
+
+        // 如果本次事件唤醒了一个 SELECT 阻塞线程（如 CONNECTION_ESTABLISHED_EVENT），
+        // 则无论 event.thread_id 是多少，都应该进入一次 interact，并且针对被唤醒的线程。
+        int target_thread_id = current_event.thread_id;
+        if (wakeup_thread_id >= 0) {
+            should_wait_for_router = 1;
+            target_thread_id = wakeup_thread_id;
+        }
 
         printf("[DESD-DEBUG] Before interact: Router=%d, EventType=%s, status_before=%d, status_after=%d, should_wait=%d\n",
                current_event.router_id,
@@ -1968,10 +1993,10 @@ void desd_event_loop() {
                 // 进入单线程交互阶段
                 // 只与当前事件对应的线程交互，直到它再次阻塞
                 printf("[DESD-DEBUG] Enter interact_with_router_until_it_blocks(router=%d, thread=%d)\n",
-                       current_event.router_id, current_event.thread_id);
-                interact_with_router_until_it_blocks(current_event.router_id, current_event.thread_id);
+                       current_event.router_id, target_thread_id);
+                interact_with_router_until_it_blocks(current_event.router_id, target_thread_id);
                 printf("[DESD-DEBUG] Leave interact_with_router_until_it_blocks(router=%d, thread=%d)\n",
-                       current_event.router_id, current_event.thread_id);
+                       current_event.router_id, target_thread_id);
             } else {
                 // 该 router 没有 RUNNING 线程（可能都已经 BLOCKED），跳过 interact
                 printf("[DESD-LOOP] R%d has no RUNNING threads after processing event %s, skipping interact phase.\n",
@@ -2533,18 +2558,25 @@ void handle_connection_established_event(Event event) {
                     char request_id[64];
                     strncpy(request_id, select_ti->blocked_on_request_id, 63);
                     request_id[63] = '\0';
-                    
+
                     if (select_ti->pending_timeout_event_id > 0) {
                         cancel_event(select_ti->pending_timeout_event_id);
                         printf("[DESD] Canceled timeout event %lu for R%d (connection arrived before timeout).\n",
                                select_ti->pending_timeout_event_id, router_id);
                         select_ti->pending_timeout_event_id = 0;
                     }
-                    
+
+                    // 将被唤醒的 SELECT 线程从 BLOCKED 置为 RUNNING，并清理 blocked_on_* 状态，
+                    // 这样 desd_event_loop 会看到 BLOCKED->RUNNING，从而进入 interact。
                     select_ti->status = RUNNING;
                     memset(select_ti->blocked_on_request_id, 0, 64);
                     memset(select_ti->blocked_on_function, 0, 64);
-                    
+
+                    // 记录本次唤醒的是哪个线程，供 desd_event_loop 在处理 CONNECTION_ESTABLISHED_EVENT
+                    // 后立刻对该线程执行 interact_with_router_until_it_blocks。
+                    router_states[router_id].select_wakeup_pending = 1;
+                    router_states[router_id].select_wakeup_thread_id = select_ti->thread_id;
+
                     // 构建就绪FD列表，包含所有listening socket（它们都有pending connection）
                     json_t *ready_fds_array = json_array();
                     for (int i = 0; i < router_states[router_id].listen_count; i++) {
