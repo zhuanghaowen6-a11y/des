@@ -2470,6 +2470,33 @@ void handle_connection_established_event(Event event) {
             // 立即为 server 端注册虚拟连接（模拟内核的 child socket 行为）
             // 使用负数作为虚拟 fd，格式为 -(connection_id + 1000)
             // 🔥 关键修复：使用偏移量避免与 -1（"未设置"标志）冲突
+            int existing_real_server_fd = -1;
+            for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+                if (router_states[server_router_id].connections[i].is_active &&
+                    router_states[server_router_id].connections[i].connection_id == connection_id &&
+                    router_states[server_router_id].connections[i].peer_router_id == client_router_id &&
+                    router_states[server_router_id].connections[i].socket_fd >= 0) {
+                    existing_real_server_fd = router_states[server_router_id].connections[i].socket_fd;
+                    break;
+                }
+            }
+
+            if (existing_real_server_fd >= 0) {
+                for (int i = 0; i < MAX_CONNECTIONS_PER_ROUTER; i++) {
+                    if (router_states[client_router_id].connections[i].is_active &&
+                        router_states[client_router_id].connections[i].socket_fd == client_socket_fd &&
+                        router_states[client_router_id].connections[i].connection_id == connection_id) {
+                        if (router_states[client_router_id].connections[i].peer_socket_fd == -1 ||
+                            router_states[client_router_id].connections[i].peer_socket_fd < 0) {
+                            router_states[client_router_id].connections[i].peer_socket_fd = existing_real_server_fd;
+                        }
+                        break;
+                    }
+                }
+                printf("[DESD] R%d (server) CONNECTION_ESTABLISHED_EVENT ignored for conn_id=%lu: real_fd=%d already registered.\n",
+                       server_router_id, connection_id, existing_real_server_fd);
+                return;
+            }
             int virtual_server_fd = -(int)(connection_id + 1000);
             printf("[DEBUG-CONN-EST] R%d (server) registering virtual connection: virtual_fd=%d client=%d client_fd=%d conn_id=%lu\n",
                    server_router_id, virtual_server_fd, client_router_id, client_socket_fd, connection_id);
@@ -2490,7 +2517,9 @@ void handle_connection_established_event(Event event) {
                 if (router_states[client_router_id].connections[i].is_active &&
                     router_states[client_router_id].connections[i].socket_fd == client_socket_fd &&
                     router_states[client_router_id].connections[i].connection_id == connection_id) {
-                    router_states[client_router_id].connections[i].peer_socket_fd = virtual_server_fd;
+                    if (router_states[client_router_id].connections[i].peer_socket_fd == -1) {
+                        router_states[client_router_id].connections[i].peer_socket_fd = virtual_server_fd;
+                    }
                     break;
                 }
             }
