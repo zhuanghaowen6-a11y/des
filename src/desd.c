@@ -1507,6 +1507,8 @@ void drain_all_messages_nonblocking() {
                     if (ti) {
                         strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                         ti->blocked_on_request_id[63] = '\0';
+                        strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
+                        ti->blocked_on_function[63] = '\0';
                         ti->status = BLOCKED;
                     }
                     pthread_mutex_unlock(&router_states_mutex);
@@ -1559,6 +1561,8 @@ void drain_all_messages_nonblocking() {
                     if (ti) {
                         strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                         ti->blocked_on_request_id[63] = '\0';
+                        strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
+                        ti->blocked_on_function[63] = '\0';
                         ti->status = BLOCKED;
                     }
                     pthread_mutex_unlock(&router_states_mutex);
@@ -1760,6 +1764,8 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
                 if (ti) {
                     strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                     ti->blocked_on_request_id[63] = '\0';
+                    strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
+                    ti->blocked_on_function[63] = '\0';
                     ti->status = BLOCKED;
                 }
                 pthread_mutex_unlock(&router_states_mutex);
@@ -1789,6 +1795,8 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
                 if (ti) {
                     strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                     ti->blocked_on_request_id[63] = '\0';
+                    strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
+                    ti->blocked_on_function[63] = '\0';
                     ti->status = BLOCKED;
                 }
                 pthread_mutex_unlock(&router_states_mutex);
@@ -1872,6 +1880,8 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
             if (ti) {
                 strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                 ti->blocked_on_request_id[63] = '\0';
+                strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
+                ti->blocked_on_function[63] = '\0';
                 ti->status = BLOCKED;
             }
             pthread_mutex_unlock(&router_states_mutex);
@@ -2232,11 +2242,12 @@ void handle_listen_event(Event event) {
             if (ti_err && ti_err->status == BLOCKED) {
                 ti_err->status = RUNNING;
                 ti_err->blocked_on_request_id[0] = '\0';
+                ti_err->blocked_on_function[0] = '\0';
             }
             pthread_mutex_unlock(&router_states_mutex);
             return;
         }
-        
+
         // 检查是否已存在该地址（避免重复）
         for (int i = 0; i < router_states[router_id].listen_count; i++) {
             if (strcmp(router_states[router_id].listen_addresses[i], listen_address_local) == 0) {
@@ -2249,6 +2260,7 @@ void handle_listen_event(Event event) {
                 if (ti_dup && ti_dup->status == BLOCKED) {
                     ti_dup->status = RUNNING;
                     ti_dup->blocked_on_request_id[0] = '\0';
+                    ti_dup->blocked_on_function[0] = '\0';
                 }
                 pthread_mutex_unlock(&router_states_mutex);
                 return;
@@ -2256,10 +2268,10 @@ void handle_listen_event(Event event) {
         }
         
         // 添加新的监听地址和socket_fd
-        int index = router_states[router_id].listen_count;
-        strncpy(router_states[router_id].listen_addresses[index], listen_address_local, 255);
-        router_states[router_id].listen_addresses[index][255] = '\0';
-        router_states[router_id].listening_socket_fds[index] = socket_fd;
+        int listen_index = router_states[router_id].listen_count;
+        strncpy(router_states[router_id].listen_addresses[listen_index], listen_address_local, 255);
+        router_states[router_id].listen_addresses[listen_index][255] = '\0';
+        router_states[router_id].listening_socket_fds[listen_index] = socket_fd;
         router_states[router_id].listen_count++;
         
         // LISTEN事件信息已在下面显示，移除DEBUG输出
@@ -2278,6 +2290,7 @@ void handle_listen_event(Event event) {
             if (strncmp(ti->blocked_on_request_id, request_id, 63) == 0) {
                 ti->status = RUNNING;
                 ti->blocked_on_request_id[0] = '\0';
+                ti->blocked_on_function[0] = '\0';
             }
         }
         pthread_mutex_unlock(&router_states_mutex);
@@ -2822,6 +2835,7 @@ void handle_connection_info_event(Event event) {
         if (ti_fail && ti_fail->status == BLOCKED) {
             ti_fail->status = RUNNING;
             ti_fail->blocked_on_request_id[0] = '\0';
+            ti_fail->blocked_on_function[0] = '\0';
         }
         pthread_mutex_unlock(&router_states_mutex);
         return;
@@ -3056,6 +3070,7 @@ void handle_connection_info_event(Event event) {
         if (strncmp(ti->blocked_on_request_id, request_id, 63) == 0) {
             ti->status = RUNNING;
             ti->blocked_on_request_id[0] = '\0';
+            ti->blocked_on_function[0] = '\0';
         }
     }
     pthread_mutex_unlock(&router_states_mutex);
@@ -3219,6 +3234,7 @@ void handle_close_socket_event(Event event) {
         if (strncmp(ti->blocked_on_request_id, request_id, 63) == 0) {
             ti->status = RUNNING;
             ti->blocked_on_request_id[0] = '\0';
+            ti->blocked_on_function[0] = '\0';
         }
     }
     pthread_mutex_unlock(&router_states_mutex);
@@ -4574,6 +4590,7 @@ void handle_get_virtual_time_event(Event event) {
         if (strncmp(ti->blocked_on_request_id, request_id_local, 63) == 0) {
             ti->status = RUNNING;
             ti->blocked_on_request_id[0] = '\0';
+            ti->blocked_on_function[0] = '\0';
         }
     }
     pthread_mutex_unlock(&router_states_mutex);
