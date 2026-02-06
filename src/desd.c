@@ -3498,11 +3498,34 @@ void handle_router_block_request(Event event) {
             json_error_t error2;
             json_t *payload_obj2 = json_loads(event.payload.json_str, 0, &error2);
             int timeout_ms = -1;
-            json_t *monitored_fds_array = NULL;
+            
+            // 本地数组：立即从 JSON 拷贝 monitored_fds，避免 json_decref 后悬挂指针
+            int monitored_fd_tmp[64];
+            int monitored_events_tmp[64];
+            int monitored_tmp_count = 0;
             
             if (payload_obj2) {
                 timeout_ms = json_integer_value(json_object_get(payload_obj2, "timeout_ms"));
-                monitored_fds_array = json_object_get(payload_obj2, "monitored_fds");
+                json_t *monitored_fds_array = json_object_get(payload_obj2, "monitored_fds");
+                
+                // 立即拷贝到本地数组
+                if (monitored_fds_array && json_is_array(monitored_fds_array)) {
+                    size_t array_size = json_array_size(monitored_fds_array);
+                    for (size_t i = 0; i < array_size && monitored_tmp_count < 64; i++) {
+                        json_t *fd_info = json_array_get(monitored_fds_array, i);
+                        if (json_is_object(fd_info)) {
+                            int fd = json_integer_value(json_object_get(fd_info, "fd"));
+                            int events = json_integer_value(json_object_get(fd_info, "events"));
+                            if (fd >= 0) {
+                                monitored_fd_tmp[monitored_tmp_count] = fd;
+                                monitored_events_tmp[monitored_tmp_count] = events;
+                                monitored_tmp_count++;
+                            }
+                        }
+                    }
+                }
+                // 拷贝完成后立即释放 JSON，后续只用本地数组
+                json_decref(payload_obj2);
             }
             
             // 构建就绪的 FD 列表及其 revents
@@ -3510,152 +3533,134 @@ void handle_router_block_request(Event event) {
             int has_ready_fds = 0;
             
             // [DEBUG] 记录SELECT_CALL的详细信息
-            size_t monitored_fds_count = monitored_fds_array && json_is_array(monitored_fds_array) ? 
-                                         json_array_size(monitored_fds_array) : 0;
-            printf("[DEBUG-SELECT] R%d SELECT_CALL: timeout=%dms, monitoring %zu fd(s), pending_connections=%d\n",
-                   router_id, timeout_ms, monitored_fds_count, router_states[router_id].pending_connections_count);
+            printf("[DEBUG-SELECT] R%d SELECT_CALL: timeout=%dms, monitoring %d fd(s), pending_connections=%d\n",
+                   router_id, timeout_ms, monitored_tmp_count, router_states[router_id].pending_connections_count);
             
-            // 遍历所有监听的 FD，检查各种事件
-            if (monitored_fds_array && json_is_array(monitored_fds_array)) {
-                size_t array_size = json_array_size(monitored_fds_array);
+            // 遍历所有监听的 FD，检查各种事件（使用本地数组）
+            for (int i = 0; i < monitored_tmp_count; i++) {
+                int fd = monitored_fd_tmp[i];
+                int events = monitored_events_tmp[i];
+                int revents = 0;
                 
-                for (size_t i = 0; i < array_size; i++) {
-                    json_t *fd_info = json_array_get(monitored_fds_array, i);
+                // 检查 POLLIN：是否有数据可读或有新连接待accept
+                if (events & 0x001) {  // POLLIN = 0x001
+                    // 1. 检查是否有数据包可读
+                    int head = router_states[router_id].pending_buffer_head;
+                    int count = router_states[router_id].pending_packets_count;
                     
-                    // 解析 {fd, events} 对象
-                    if (!json_is_object(fd_info)) continue;
-                    
-                    int fd = json_integer_value(json_object_get(fd_info, "fd"));
-                    int events = json_integer_value(json_object_get(fd_info, "events"));
-                    
-                    if (fd < 0) continue;
-                    
-                    int revents = 0;
-                    
-                    // 检查 POLLIN：是否有数据可读或有新连接待accept
-                    if (events & 0x001) {  // POLLIN = 0x001
-                        // 1. 检查是否有数据包可读
-                        int head = router_states[router_id].pending_buffer_head;
-                        int count = router_states[router_id].pending_packets_count;
-                        
-                        for (int j = 0; j < count; j++) {
-                            int idx = (head + j) % MAX_PENDING_PACKETS;
-                            int buf_idx = router_states[router_id].pending_buffer_indices[idx];
-                            if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS &&
-                                router_states[router_id].packet_buffers[buf_idx].is_used &&
-                                router_states[router_id].packet_buffers[buf_idx].socket_fd == fd) {
-                                revents |= 0x001;  // POLLIN - 数据可读
-                                break;
-                            }
-                        }
-                        
-                        // 2. 检查是否是listening socket且有pending连接
-                        if (!(revents & 0x001)) {  // 如果还没有设置POLLIN
-                            for (int j = 0; j < router_states[router_id].listen_count; j++) {
-                                if (router_states[router_id].listening_socket_fds[j] == fd) {
-                                    // 这是一个listening socket
-                                    printf("[DEBUG-LISTEN] R%d fd=%d is listening socket (listen_idx=%d), pending=%d\n",
-                                           router_id, fd, j, router_states[router_id].pending_connections_count);
-                                    if (router_states[router_id].pending_connections_count > 0) {
-                                        revents |= 0x001;  // POLLIN - 新连接待accept
-                                        printf("[DEBUG-LISTEN] R%d fd=%d set POLLIN due to %d pending connection(s)\n",
-                                               router_id, fd, router_states[router_id].pending_connections_count);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    // 检查 POLLOUT：socket 是否可写（仅对已知的活动连接fd生效）
-                    if (events & 0x004) {  // POLLOUT = 0x004
-                        // 查找该 fd 的连接信息
-                        for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
-                            if (router_states[router_id].connections[j].is_active &&
-                                router_states[router_id].connections[j].socket_fd == fd) {
-                                // 连接存在且活跃，socket 可写
-                                revents |= 0x004;  // POLLOUT
-                                break;
-                            }
-                        }
-                        // 未找到的fd（非DES管理的fd）不设置任何就绪位，避免误唤醒
-                    }
-                    
-                    // 检查 POLLERR/POLLHUP：仅对已知连接fd设置
-                    for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
-                        if (router_states[router_id].connections[j].socket_fd == fd) {
-                            if (!router_states[router_id].connections[j].is_active) {
-                                revents |= 0x010;  // POLLHUP - 连接已断开
-                            }
+                    for (int j = 0; j < count; j++) {
+                        int idx = (head + j) % MAX_PENDING_PACKETS;
+                        int buf_idx = router_states[router_id].pending_buffer_indices[idx];
+                        if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS &&
+                            router_states[router_id].packet_buffers[buf_idx].is_used &&
+                            router_states[router_id].packet_buffers[buf_idx].socket_fd == fd) {
+                            revents |= 0x001;  // POLLIN - 数据可读
                             break;
                         }
                     }
                     
-                    // 如果有任何事件就绪，按更严格的条件将其添加到结果列表
-                    if (revents != 0) {
-                        // 关键过滤：
-                        // 1) 仅当是监听socket且pending_connections>0的POLLIN才算就绪
-                        // 2) 或者是数据socket：
-                        //    - 有对应pending_packets的POLLIN
-                        //    - 已知活跃连接fd的POLLOUT
-                        // 3) 不因未知fd的HUP/ERR而唤醒
-                        int eligible = 0;
-                        // 判断是否监听socket
-                        int is_listen_fd = 0;
+                    // 2. 检查是否是listening socket且有pending连接
+                    if (!(revents & 0x001)) {  // 如果还没有设置POLLIN
                         for (int j = 0; j < router_states[router_id].listen_count; j++) {
                             if (router_states[router_id].listening_socket_fds[j] == fd) {
-                                is_listen_fd = 1; break;
-                            }
-                        }
-
-                        if ((revents & 0x001) && (events & 0x001) && is_listen_fd && router_states[router_id].pending_connections_count > 0) {
-                            // 监听socket有待accept连接
-                            eligible = 1;
-                        } else {
-                            // 非监听：检查是否数据socket
-                            int is_known_conn_fd = 0;
-                            for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
-                                if (router_states[router_id].connections[j].is_active &&
-                                    router_states[router_id].connections[j].socket_fd == fd) {
-                                    is_known_conn_fd = 1; break;
+                                // 这是一个listening socket
+                                printf("[DEBUG-LISTEN] R%d fd=%d is listening socket (listen_idx=%d), pending=%d\n",
+                                       router_id, fd, j, router_states[router_id].pending_connections_count);
+                                if (router_states[router_id].pending_connections_count > 0) {
+                                    revents |= 0x001;  // POLLIN - 新连接待accept
+                                    printf("[DEBUG-LISTEN] R%d fd=%d set POLLIN due to %d pending connection(s)\n",
+                                           router_id, fd, router_states[router_id].pending_connections_count);
+                                    break;
                                 }
                             }
-                            if (is_known_conn_fd) {
-                                if ((revents & 0x004) && (events & 0x004)) {
-                                    // 已知连接上的POLLOUT
-                                    eligible = 1;
-                                } else if ((revents & 0x001) && (events & 0x001)) {
-                                    // 已知连接上的POLLIN需确认确有数据（pending_packets匹配该fd，且is_used=1）
-                                    int head = router_states[router_id].pending_buffer_head;
-                                    int count = router_states[router_id].pending_packets_count;
-                                    for (int j = 0; j < count; j++) {
-                                        int idx = (head + j) % MAX_PENDING_PACKETS;
-                                        int buf_idx = router_states[router_id].pending_buffer_indices[idx];
-                                        if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS &&
-                                            router_states[router_id].packet_buffers[buf_idx].is_used &&
-                                            router_states[router_id].packet_buffers[buf_idx].socket_fd == fd) {
-                                            eligible = 1; break;
-                                        }
+                        }
+                    }
+                }
+                
+                // 检查 POLLOUT：socket 是否可写（仅对已知的活动连接fd生效）
+                if (events & 0x004) {  // POLLOUT = 0x004
+                    // 查找该 fd 的连接信息
+                    for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                        if (router_states[router_id].connections[j].is_active &&
+                            router_states[router_id].connections[j].socket_fd == fd) {
+                            // 连接存在且活跃，socket 可写
+                            revents |= 0x004;  // POLLOUT
+                            break;
+                        }
+                    }
+                    // 未找到的fd（非DES管理的fd）不设置任何就绪位，避免误唤醒
+                }
+                
+                // 检查 POLLERR/POLLHUP：仅对已知连接fd设置
+                for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                    if (router_states[router_id].connections[j].socket_fd == fd) {
+                        if (!router_states[router_id].connections[j].is_active) {
+                            revents |= 0x010;  // POLLHUP - 连接已断开
+                        }
+                        break;
+                    }
+                }
+                
+                // 如果有任何事件就绪，按更严格的条件将其添加到结果列表
+                if (revents != 0) {
+                    // 关键过滤：
+                    // 1) 仅当是监听socket且pending_connections>0的POLLIN才算就绪
+                    // 2) 或者是数据socket：
+                    //    - 有对应pending_packets的POLLIN
+                    //    - 已知活跃连接fd的POLLOUT
+                    // 3) 不因未知fd的HUP/ERR而唤醒
+                    int eligible = 0;
+                    // 判断是否监听socket
+                    int is_listen_fd = 0;
+                    for (int j = 0; j < router_states[router_id].listen_count; j++) {
+                        if (router_states[router_id].listening_socket_fds[j] == fd) {
+                            is_listen_fd = 1; break;
+                        }
+                    }
+
+                    if ((revents & 0x001) && (events & 0x001) && is_listen_fd && router_states[router_id].pending_connections_count > 0) {
+                        // 监听socket有待accept连接
+                        eligible = 1;
+                    } else {
+                        // 非监听：检查是否数据socket
+                        int is_known_conn_fd = 0;
+                        for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                            if (router_states[router_id].connections[j].is_active &&
+                                router_states[router_id].connections[j].socket_fd == fd) {
+                                is_known_conn_fd = 1; break;
+                            }
+                        }
+                        if (is_known_conn_fd) {
+                            if ((revents & 0x004) && (events & 0x004)) {
+                                // 已知连接上的POLLOUT
+                                eligible = 1;
+                            } else if ((revents & 0x001) && (events & 0x001)) {
+                                // 已知连接上的POLLIN需确认确有数据（pending_packets匹配该fd，且is_used=1）
+                                int head = router_states[router_id].pending_buffer_head;
+                                int count = router_states[router_id].pending_packets_count;
+                                for (int j = 0; j < count; j++) {
+                                    int idx = (head + j) % MAX_PENDING_PACKETS;
+                                    int buf_idx = router_states[router_id].pending_buffer_indices[idx];
+                                    if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS &&
+                                        router_states[router_id].packet_buffers[buf_idx].is_used &&
+                                        router_states[router_id].packet_buffers[buf_idx].socket_fd == fd) {
+                                        eligible = 1; break;
                                     }
                                 }
                             }
                         }
+                    }
 
-                        if (eligible) {
-                            json_t *ready_fd_info = json_object();
-                            json_object_set_new(ready_fd_info, "fd", json_integer(fd));
-                            json_object_set_new(ready_fd_info, "revents", json_integer(revents));
-                            json_array_append_new(ready_fds_array, ready_fd_info);
-                            has_ready_fds = 1;
-                            printf("[DEBUG-SELECT-READY] R%d add ready fd=%d revents=0x%x (listen=%d, pending_conn=%d)\n",
-                                   router_id, fd, revents, is_listen_fd, router_states[router_id].pending_connections_count);
-                        }
+                    if (eligible) {
+                        json_t *ready_fd_info = json_object();
+                        json_object_set_new(ready_fd_info, "fd", json_integer(fd));
+                        json_object_set_new(ready_fd_info, "revents", json_integer(revents));
+                        json_array_append_new(ready_fds_array, ready_fd_info);
+                        has_ready_fds = 1;
+                        printf("[DEBUG-SELECT-READY] R%d add ready fd=%d revents=0x%x (listen=%d, pending_conn=%d)\n",
+                               router_id, fd, revents, is_listen_fd, router_states[router_id].pending_connections_count);
                     }
                 }
-            }
-            
-            if (payload_obj2) {
-                json_decref(payload_obj2);
             }
             
             // 如果有就绪的 FD，立即唤醒
@@ -3714,21 +3719,11 @@ void handle_router_block_request(Event event) {
                 ti->blocked_on_function[63] = '\0';
                 
                 // 保存select()监听的fd信息，用于PACKET_RECEIVE_EVENT时判断是否需要唤醒
-                ti->monitored_fds_count = 0;
-                if (monitored_fds_array && json_is_array(monitored_fds_array)) {
-                    size_t array_size = json_array_size(monitored_fds_array);
-                    for (size_t i = 0; i < array_size && i < 64; i++) {
-                        json_t *fd_info = json_array_get(monitored_fds_array, i);
-                        if (json_is_object(fd_info)) {
-                            int fd = json_integer_value(json_object_get(fd_info, "fd"));
-                            int events = json_integer_value(json_object_get(fd_info, "events"));
-                            if (fd >= 0) {
-                                ti->monitored_fds[ti->monitored_fds_count] = fd;
-                                ti->monitored_fds_events[ti->monitored_fds_count] = events;
-                                ti->monitored_fds_count++;
-                            }
-                        }
-                    }
+                // 直接从本地数组拷贝到 ThreadInfo（JSON 已在前面释放）
+                ti->monitored_fds_count = monitored_tmp_count;
+                for (int i = 0; i < monitored_tmp_count; i++) {
+                    ti->monitored_fds[i] = monitored_fd_tmp[i];
+                    ti->monitored_fds_events[i] = monitored_events_tmp[i];
                 }
                 
                 if (timeout_ms > 0) {
