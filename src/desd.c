@@ -231,6 +231,42 @@ static ThreadInfo* find_thread_by_socket(int router_id, int comm_fd) {
     return NULL;
 }
 
+// 线程状态调试输出：打印指定 router 下所有活跃线程的状态、阻塞信息及监听的 fd
+static void debug_dump_router_threads(int router_id) {
+    if (router_id <= 0 || router_id > MAX_ROUTERS) return;
+
+    printf("[DESD-THREADS] R%d thread states snapshot:\n", router_id);
+    for (int i = 0; i < MAX_THREADS_PER_ROUTER; i++) {
+        ThreadInfo *ti = &router_states[router_id].threads[i];
+        if (!ti->is_active) continue;
+
+        const char *status_str = "UNKNOWN";
+        if (ti->status == RUNNING) status_str = "RUNNING";
+        else if (ti->status == BLOCKED) status_str = "BLOCKED";
+        else if (ti->status == IDLE) status_str = "IDLE";
+
+        printf("[DESD-THREADS]   T%d status=%s comm_fd=%d blocked_on_func='%s' blocked_on_req='%s' blocked_on_socket_fd=%d monitored_fds=%d pending_events=%d\n",
+               ti->thread_id,
+               status_str,
+               ti->comm_socket_fd,
+               ti->blocked_on_function,
+               ti->blocked_on_request_id,
+               ti->blocked_on_socket_fd,
+               ti->monitored_fds_count,
+               ti->pending_event_count);
+
+        if (ti->monitored_fds_count > 0) {
+            printf("[DESD-THREADS]   T%d monitored_fds:", ti->thread_id);
+            for (int j = 0; j < ti->monitored_fds_count && j < 64; j++) {
+                printf(" (fd=%d events=0x%x)",
+                       ti->monitored_fds[j],
+                       ti->monitored_fds_events[j]);
+            }
+            printf("\n");
+        }
+    }
+}
+
 // 注册新线程
 static ThreadInfo* register_thread(int router_id, int thread_id, int comm_fd) {
     if (router_id <= 0 || router_id > MAX_ROUTERS) return NULL;
@@ -1903,11 +1939,11 @@ void desd_event_loop() {
         }
 
         // 调试限制：达到 MAX_TOTAL_EVENTS 个事件后停止
-        if (current_event.event_id >= MAX_TOTAL_EVENTS/6) {
+        if (current_event.event_id >= MAX_TOTAL_EVENTS/30) {
             printf("[DESD-STOP] Reached %d events limit (EventID: %lu). Stopping simulation.\n",
-                   MAX_TOTAL_EVENTS/6, current_event.event_id);
+                   MAX_TOTAL_EVENTS/30, current_event.event_id);
             printf("[DESD-EXIT] Reason: Event limit reached (%d). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
-                   MAX_TOTAL_EVENTS/6, current_virtual_time, heartbeat_event_counter);
+                   MAX_TOTAL_EVENTS/30, current_virtual_time, heartbeat_event_counter);
             exit(0);
         }
 
@@ -3395,7 +3431,8 @@ void handle_router_block_request(Event event) {
                         ti->blocked_on_request_id[0] = '\0';
                     }
                     send_eagain_response(router_id, thread_id, request_id_local);
-                    printf("[DESD] R%d recv() on non-blocking socket, no data available, returning EAGAIN.\n", router_id);
+                    printf("[DESD] R%d recv(fd:%d) on non-blocking socket, no data available, returning EAGAIN.\n",
+                           router_id, socket_fd);
                 } else {
                     // 阻塞模式：保持阻塞
                     ti->status = BLOCKED;
@@ -3406,6 +3443,9 @@ void handle_router_block_request(Event event) {
                     ti->blocked_on_socket_fd = socket_fd;  // 记录RECV阻塞等待的socket fd
                     printf("[DESD] R%d T%d blocked on %s (ReqID: %s, fd:%d) - no pending packets.\n",
                            router_id, thread_id, blocked_func_str_local, request_id_local, socket_fd);
+
+                    // 在 RECV 真正进入阻塞前打印一次线程快照，观察是否是期望的线程/FD 在等待
+                    debug_dump_router_threads(router_id);
                 }
             }
         } else if (strcmp(blocked_func_str_local, "ACCEPT_CALL") == 0) {
@@ -3716,12 +3756,15 @@ void handle_router_block_request(Event event) {
                     push_event(timeout_event);
                     ti->pending_timeout_event_id = timeout_event.event_id;
                     
-                    printf("[DESD] R%d blocked on %s (ReqID: %s) with %dms timeout. Registered TIMEOUT_EVENT (ID: %lu) at VT=%.3f.\n",
-                           router_id, blocked_func_str_local, request_id_local, timeout_ms, timeout_event.event_id, timeout_time);
+                    printf("[DESD] R%d T%d blocked on %s (ReqID: %s) with %dms timeout. Registered TIMEOUT_EVENT (ID: %lu) at VT=%.3f.\n",
+                           router_id, thread_id, blocked_func_str_local, request_id_local, timeout_ms, timeout_event.event_id, timeout_time);
                 } else {
-                    printf("[DESD] R%d blocked on %s (ReqID: %s) - infinite timeout.\n",
-                           router_id, blocked_func_str_local, request_id_local);
+                    printf("[DESD] R%d T%d blocked on %s (ReqID: %s) - infinite timeout.\n",
+                           router_id, thread_id, blocked_func_str_local, request_id_local);
                 }
+
+                // 在 SELECT 阻塞时打印该路由器下所有线程的状态和监听的 fd，便于排查唤醒是否匹配
+                debug_dump_router_threads(router_id);
             }
         } else if (strcmp(blocked_func_str_local, "SLEEP_CALL") == 0) {
             // 处理 SLEEP_CALL：直接注册一个唤醒事件
@@ -3996,6 +4039,9 @@ void handle_packet_receive_event(Event event) {
         
         printf("[DESD] R%d received PACKET_RECEIVE_EVENT for %s (buffer_index=%d, packet_socket_fd=%d).\n",
                target_router_id, destination_abstract_address, buffer_index, packet_socket_fd);
+
+        // 每个包到达时打印一下该 router 下所有线程的状态和阻塞信息，帮助确认应被唤醒的线程
+        debug_dump_router_threads(target_router_id);
 
         // 精确查找阻塞线程：优先找等待该socket_fd的RECV线程，其次找监控该fd的SELECT线程
         ThreadInfo *blocked_ti = NULL;
