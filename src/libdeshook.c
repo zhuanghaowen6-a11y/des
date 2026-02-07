@@ -628,6 +628,49 @@ static int read_one_desd_response(ThreadState *state, Message *msg) {
     }
 }
 
+static int try_read_one_desd_response_buffer_only(ThreadState *state, Message *msg) {
+    if (!state || state->desd_socket_fd < 0) {
+        return -1;
+    }
+
+    memset(msg, 0, sizeof(Message));
+    msg->event_type = -1;
+
+    while (1) {
+        char *newline_pos = memchr(state->recv_buf, '\n', state->recv_len);
+        if (newline_pos == NULL) {
+            return 0;
+        }
+
+        size_t line_len = newline_pos - state->recv_buf;
+
+        char line_buf[MAX_MSG_SIZE];
+        if (line_len >= MAX_MSG_SIZE) {
+            fprintf(stderr, "[LIBDESHOOK ERROR] try_read_one_desd_response_buffer_only: line too long (%zu bytes)\n", line_len);
+            size_t remaining = state->recv_len - line_len - 1;
+            memmove(state->recv_buf, newline_pos + 1, remaining);
+            state->recv_len = remaining;
+            continue;
+        }
+
+        memcpy(line_buf, state->recv_buf, line_len);
+        line_buf[line_len] = '\0';
+
+        size_t remaining = state->recv_len - line_len - 1;
+        memmove(state->recv_buf, newline_pos + 1, remaining);
+        state->recv_len = remaining;
+
+        if (line_len > 0) {
+            json_to_message(line_buf, msg);
+            if (msg->message_type != DESD_TO_HOOK) {
+                fprintf(stderr, "[LIBDESHOOK WARNING] try_read_one_desd_response_buffer_only: failed to parse JSON line or unexpected message_type\n");
+                continue;
+            }
+            return 1;
+        }
+    }
+}
+
 // Helper function to receive response from desd
 // Returns 1 on success, 0 on failure
 static int recv_msg_from_desd(Message* resp_msg_out) {
@@ -1693,7 +1736,11 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         return result;
     }
 
-    // Step 4: 需要等待 - 向DESD发送阻塞请求（只发送，不等待响应）
+    // ===== 两阶段 poll 协议 =====
+    // Phase 1: 发送 block request，只等待 DESD 的响应（不监听本地 fd）
+    // Phase 2: 收到 ALLOW_POLL 后，才同时监听 desd_fd 和本地 fd
+
+    // Step 4: 向 DESD 发送阻塞请求
     Message poll_block_req;
     memset(&poll_block_req, 0, sizeof(Message));
     poll_block_req.message_type = HOOK_TO_DESD;
@@ -1712,7 +1759,7 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
     json_object_set_new(payload_obj, "request_id", json_string(poll_block_req.request_id));
     json_object_set_new(payload_obj, "timeout_ms", json_integer(timeout));
     
-    // 只传递DES管理的socket fd
+    // 只传递 DES 管理的 socket fd
     json_t *monitored_fds_array = json_array();
     for (nfds_t i = 0; i < nfds; i++) {
         int fd = fds[i].fd;
@@ -1731,7 +1778,6 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
     free(payload_str);
     json_decref(payload_obj);
 
-    // 只发送，不等待
     if (!send_msg_to_desd(&poll_block_req)) {
         fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() failed to send block request to DESD.\n", my_router_id);
         if (non_des_fds) free(non_des_fds);
@@ -1740,206 +1786,414 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         return -1;
     }
 
-    // Step 5: 构建kernel_fds数组 = [desd_fd] + 本地非DES fd
-    // 用real_poll同时监听DESD通道和本地fd
-    nfds_t kernel_nfds = 1 + non_des_count;  // desd_fd + 本地fd
-    struct pollfd *kernel_fds = (struct pollfd*)malloc(sizeof(struct pollfd) * kernel_nfds);
-    if (!kernel_fds) {
-        if (non_des_fds) free(non_des_fds);
-        if (non_des_orig_idx) free(non_des_orig_idx);
-        errno = ENOMEM;
-        return -1;
-    }
-    
-    // kernel_fds[0] = desd_fd
-    kernel_fds[0].fd = desd_fd;
-    kernel_fds[0].events = POLLIN;
-    kernel_fds[0].revents = 0;
-    
-    // kernel_fds[1..] = 本地非DES fd
-    if (non_des_fds) {
-        for (nfds_t i = 0; i < non_des_count; i++) {
-            kernel_fds[1 + i] = non_des_fds[i];
-            kernel_fds[1 + i].revents = 0;
-        }
-    }
+    // ===== Phase 1: 只等待 DESD 的响应（不监听本地 fd）=====
+    // DESD 可能返回：SUCCESS（立即就绪）、TIMEOUT（timeout=0）、ALLOW_POLL（需要阻塞）
+    struct pollfd desd_only_fd;
+    desd_only_fd.fd = desd_fd;
+    desd_only_fd.events = POLLIN;
+    desd_only_fd.revents = 0;
 
-    // Step 6: 阻塞等待 - timeout=-1表示无限等待（由DESD的TIMEOUT_EVENT控制虚拟时间）
-    int kernel_ready;
+    Message phase1_resp;
+    int phase1_got_resp = 0;
     for (;;) {
-        kernel_ready = real_poll(kernel_fds, kernel_nfds, -1);
-        if (kernel_ready < 0) {
-            if (errno == EINTR) continue;
-            fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() real_poll failed (errno=%d)\n", my_router_id, errno);
-            free(kernel_fds);
-            if (non_des_fds) free(non_des_fds);
-            if (non_des_orig_idx) free(non_des_orig_idx);
-            return -1;
-        }
-        break;
-    }
+        ThreadState *state = get_thread_state();
+        if (state) {
+            for (;;) {
+                int buf_res = try_read_one_desd_response_buffer_only(state, &phase1_resp);
+                if (buf_res == 1) {
+                    if (strcmp(phase1_resp.request_id, saved_request_id) == 0) {
+                        phase1_got_resp = 1;
+                        break;
+                    }
 
-    int desd_ready = (kernel_fds[0].revents & POLLIN);
-    int local_ready_count = 0;
-    for (nfds_t i = 1; i < kernel_nfds; i++) {
-        if (kernel_fds[i].revents != 0) {
-            local_ready_count++;
+                    printf("[LIBDESHOOK] R%d T%d discarding stale response (expected=%s, got=%s, message_type=%d, event_type=%d)\n",
+                           my_router_id,
+                           get_current_thread_id(),
+                           saved_request_id,
+                           phase1_resp.request_id,
+                           phase1_resp.message_type,
+                           phase1_resp.event_type);
+                    fflush(stdout);
+                    continue;
+                }
+                break;
+            }
         }
-    }
 
-    // Step 7: 处理结果
-    // 优先级规则：如果DESD有响应，优先处理DESD（保证虚拟时间语义）
-    if (desd_ready) {
-        // DESD有响应：接收并处理
-        // 使用recv_msg_from_desd_matching来处理可能的stale响应（来自之前fire-and-forget的CANCEL）
-        Message poll_block_resp;
-        if (!recv_msg_from_desd_matching(saved_request_id, &poll_block_resp)) {
-            fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() failed to recv from DESD.\n", my_router_id);
-            free(kernel_fds);
+        if (phase1_got_resp) {
+            break;
+        }
+
+        int phase1_ready;
+        for (;;) {
+            phase1_ready = real_poll(&desd_only_fd, 1, -1);
+            if (phase1_ready < 0) {
+                if (errno == EINTR) continue;
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() Phase1 real_poll failed (errno=%d)\n", my_router_id, errno);
+                if (non_des_fds) free(non_des_fds);
+                if (non_des_orig_idx) free(non_des_orig_idx);
+                return -1;
+            }
+            break;
+        }
+        (void)phase1_ready;
+
+        if (!recv_msg_from_desd_matching(saved_request_id, &phase1_resp)) {
+            fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() failed to recv Phase1 response from DESD.\n", my_router_id);
             if (non_des_fds) free(non_des_fds);
             if (non_des_orig_idx) free(non_des_orig_idx);
             errno = EIO;
             return -1;
         }
-        
-        // 清除所有fd的revents
-        for (nfds_t i = 0; i < nfds; i++) {
-            fds[i].revents = 0;
-        }
-        
-        json_error_t error;
-        json_t *resp_payload_obj = json_loads(poll_block_resp.payload.json_str, 0, &error);
-        const char *status = resp_payload_obj ? json_string_value(json_object_get(resp_payload_obj, "status")) : NULL;
-        
-        if (status && strcmp(status, "SUCCESS") == 0) {
-            // DES fd就绪
-            json_t *ready_fds_array = json_object_get(resp_payload_obj, "ready_fds");
-            int des_ready_count = 0;
-            
-            if (ready_fds_array && json_is_array(ready_fds_array)) {
-                size_t array_size = json_array_size(ready_fds_array);
-                for (size_t j = 0; j < array_size; j++) {
-                    json_t *fd_info = json_array_get(ready_fds_array, j);
-                    if (json_is_object(fd_info)) {
-                        json_t *fd_obj = json_object_get(fd_info, "fd");
-                        json_t *revents_obj = json_object_get(fd_info, "revents");
-                        if (fd_obj && revents_obj) {
-                            int ready_fd = json_integer_value(fd_obj);
-                            short ready_revents = (short)json_integer_value(revents_obj);
-                            for (nfds_t i = 0; i < nfds; i++) {
-                                if (fds[i].fd == ready_fd) {
-                                    short filtered = ready_revents & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
-                                    fds[i].revents = filtered;
-                                    if (filtered != 0) des_ready_count++;
-                                    break;
-                                }
+
+        break;
+    }
+    
+    json_error_t error;
+    json_t *phase1_payload = json_loads(phase1_resp.payload.json_str, 0, &error);
+    const char *phase1_status = phase1_payload ? json_string_value(json_object_get(phase1_payload, "status")) : NULL;
+    
+    // 清除所有 fd 的 revents
+    for (nfds_t i = 0; i < nfds; i++) {
+        fds[i].revents = 0;
+    }
+    
+    if (phase1_status && strcmp(phase1_status, "SUCCESS") == 0) {
+        // DESD 直接返回 SUCCESS（DES fd 已就绪）
+        // 处理 ready_fds
+        json_t *ready_fds_array = json_object_get(phase1_payload, "ready_fds");
+        int des_ready_count = 0;
+        if (ready_fds_array && json_is_array(ready_fds_array)) {
+            size_t array_size = json_array_size(ready_fds_array);
+            for (size_t j = 0; j < array_size; j++) {
+                json_t *fd_info = json_array_get(ready_fds_array, j);
+                if (json_is_object(fd_info)) {
+                    json_t *fd_obj = json_object_get(fd_info, "fd");
+                    json_t *revents_obj = json_object_get(fd_info, "revents");
+                    if (fd_obj && revents_obj) {
+                        int ready_fd = json_integer_value(fd_obj);
+                        short ready_revents = (short)json_integer_value(revents_obj);
+                        for (nfds_t i = 0; i < nfds; i++) {
+                            if (fds[i].fd == ready_fd) {
+                                short filtered = ready_revents & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
+                                fds[i].revents = filtered;
+                                if (filtered != 0) des_ready_count++;
+                                break;
                             }
                         }
                     }
                 }
             }
-            
-            // 同时检查本地fd是否也ready（此时kernel_fds[1..]的revents可用）
+        }
+        // 同时检查本地 fd（0-timeout 合并）
+        int local_count = 0;
+        if (non_des_count > 0 && non_des_fds) {
             for (nfds_t i = 0; i < non_des_count; i++) {
-                if (kernel_fds[1 + i].revents != 0) {
-                    fds[non_des_orig_idx[i]].revents = kernel_fds[1 + i].revents;
+                non_des_fds[i].revents = 0;
+            }
+            int local_poll_result = real_poll(non_des_fds, non_des_count, 0);
+            if (local_poll_result > 0) {
+                for (nfds_t i = 0; i < non_des_count; i++) {
+                    if (non_des_fds[i].revents != 0) {
+                        fds[non_des_orig_idx[i]].revents = non_des_fds[i].revents;
+                        local_count++;
+                    }
                 }
             }
+        }
+        poll_result = des_ready_count + local_count;
+        if (phase1_payload) json_decref(phase1_payload);
+        if (non_des_fds) free(non_des_fds);
+        if (non_des_orig_idx) free(non_des_orig_idx);
+        return poll_result;
+        
+    } else if (phase1_status && strcmp(phase1_status, "TIMEOUT") == 0) {
+        // DESD 直接返回 TIMEOUT（通常是 timeout=0 的情况）
+        // 同时检查本地 fd（0-timeout 合并）
+        int local_count = 0;
+        if (non_des_count > 0 && non_des_fds) {
+            for (nfds_t i = 0; i < non_des_count; i++) {
+                non_des_fds[i].revents = 0;
+            }
+            int local_poll_result = real_poll(non_des_fds, non_des_count, 0);
+            if (local_poll_result > 0) {
+                for (nfds_t i = 0; i < non_des_count; i++) {
+                    if (non_des_fds[i].revents != 0) {
+                        fds[non_des_orig_idx[i]].revents = non_des_fds[i].revents;
+                        local_count++;
+                    }
+                }
+            }
+        }
+        poll_result = local_count;
+        if (phase1_payload) json_decref(phase1_payload);
+        if (non_des_fds) free(non_des_fds);
+        if (non_des_orig_idx) free(non_des_orig_idx);
+        return poll_result;
+        
+    } else if (phase1_status && strcmp(phase1_status, "ALLOW_POLL") == 0) {
+        // DESD 返回 ALLOW_POLL：线程已标记为 BLOCKED，现在可以进入 Phase 2
+        if (phase1_payload) json_decref(phase1_payload);
+
+        ThreadState *state = get_thread_state();
+        Message buffered_phase2_resp;
+        int have_buffered_phase2 = 0;
+        if (state) {
+            for (;;) {
+                int buf_res = try_read_one_desd_response_buffer_only(state, &buffered_phase2_resp);
+                if (buf_res == 1) {
+                    if (strcmp(buffered_phase2_resp.request_id, saved_request_id) == 0) {
+                        have_buffered_phase2 = 1;
+                        break;
+                    }
+
+                    printf("[LIBDESHOOK] R%d T%d discarding stale response (expected=%s, got=%s, message_type=%d, event_type=%d)\n",
+                           my_router_id,
+                           get_current_thread_id(),
+                           saved_request_id,
+                           buffered_phase2_resp.request_id,
+                           buffered_phase2_resp.message_type,
+                           buffered_phase2_resp.event_type);
+                    fflush(stdout);
+                    continue;
+                }
+                break;
+            }
+        }
+
+        if (have_buffered_phase2) {
+            json_t *phase2_payload = json_loads(buffered_phase2_resp.payload.json_str, 0, &error);
+            const char *phase2_status = phase2_payload ? json_string_value(json_object_get(phase2_payload, "status")) : NULL;
+
+            int local_count = 0;
+            if (non_des_count > 0 && non_des_fds) {
+                for (nfds_t i = 0; i < non_des_count; i++) {
+                    non_des_fds[i].revents = 0;
+                }
+                int local_poll_result = real_poll(non_des_fds, non_des_count, 0);
+                if (local_poll_result > 0) {
+                    for (nfds_t i = 0; i < non_des_count; i++) {
+                        if (non_des_fds[i].revents != 0) {
+                            fds[non_des_orig_idx[i]].revents = non_des_fds[i].revents;
+                            local_count++;
+                        }
+                    }
+                }
+            }
+
+            if (phase2_status && strcmp(phase2_status, "SUCCESS") == 0) {
+                json_t *ready_fds_array = json_object_get(phase2_payload, "ready_fds");
+                int des_ready_count = 0;
+                if (ready_fds_array && json_is_array(ready_fds_array)) {
+                    size_t array_size = json_array_size(ready_fds_array);
+                    for (size_t j = 0; j < array_size; j++) {
+                        json_t *fd_info = json_array_get(ready_fds_array, j);
+                        if (json_is_object(fd_info)) {
+                            json_t *fd_obj = json_object_get(fd_info, "fd");
+                            json_t *revents_obj = json_object_get(fd_info, "revents");
+                            if (fd_obj && revents_obj) {
+                                int ready_fd = json_integer_value(fd_obj);
+                                short ready_revents = (short)json_integer_value(revents_obj);
+                                for (nfds_t i = 0; i < nfds; i++) {
+                                    if (fds[i].fd == ready_fd) {
+                                        short filtered = ready_revents & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
+                                        fds[i].revents = filtered;
+                                        if (filtered != 0) des_ready_count++;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                poll_result = des_ready_count + local_count;
+            } else if (phase2_status && strcmp(phase2_status, "TIMEOUT") == 0) {
+                poll_result = local_count;
+            } else {
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() Phase2 DESD returned unexpected status (buffered): %s\n",
+                        my_router_id, phase2_status ? phase2_status : "NULL");
+                poll_result = 0;
+            }
+
+            if (phase2_payload) json_decref(phase2_payload);
+            if (non_des_fds) free(non_des_fds);
+            if (non_des_orig_idx) free(non_des_orig_idx);
+            return poll_result;
+        }
+        
+        // ===== Phase 2: 同时监听 desd_fd 和本地 fd =====
+        nfds_t kernel_nfds = 1 + non_des_count;
+        struct pollfd *kernel_fds = (struct pollfd*)malloc(sizeof(struct pollfd) * kernel_nfds);
+        if (!kernel_fds) {
+            if (non_des_fds) free(non_des_fds);
+            if (non_des_orig_idx) free(non_des_orig_idx);
+            errno = ENOMEM;
+            return -1;
+        }
+        
+        kernel_fds[0].fd = desd_fd;
+        kernel_fds[0].events = POLLIN;
+        kernel_fds[0].revents = 0;
+        
+        if (non_des_fds) {
+            for (nfds_t i = 0; i < non_des_count; i++) {
+                kernel_fds[1 + i] = non_des_fds[i];
+                kernel_fds[1 + i].revents = 0;
+            }
+        }
+        
+        int kernel_ready;
+        for (;;) {
+            kernel_ready = real_poll(kernel_fds, kernel_nfds, -1);
+            if (kernel_ready < 0) {
+                if (errno == EINTR) continue;
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() Phase2 real_poll failed (errno=%d)\n", my_router_id, errno);
+                free(kernel_fds);
+                if (non_des_fds) free(non_des_fds);
+                if (non_des_orig_idx) free(non_des_orig_idx);
+                return -1;
+            }
+            break;
+        }
+        
+        int desd_ready = (kernel_fds[0].revents & POLLIN);
+        int local_ready_count = 0;
+        for (nfds_t i = 1; i < kernel_nfds; i++) {
+            if (kernel_fds[i].revents != 0) {
+                local_ready_count++;
+            }
+        }
+        
+        if (desd_ready) {
+            // DESD 有响应：接收最终结果（SUCCESS/TIMEOUT）
+            Message phase2_resp;
+            if (!recv_msg_from_desd_matching(saved_request_id, &phase2_resp)) {
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() failed to recv Phase2 response from DESD.\n", my_router_id);
+                free(kernel_fds);
+                if (non_des_fds) free(non_des_fds);
+                if (non_des_orig_idx) free(non_des_orig_idx);
+                errno = EIO;
+                return -1;
+            }
             
-            poll_result = des_ready_count + local_ready_count;
-            if (resp_payload_obj) json_decref(resp_payload_obj);
+            json_t *phase2_payload = json_loads(phase2_resp.payload.json_str, 0, &error);
+            const char *phase2_status = phase2_payload ? json_string_value(json_object_get(phase2_payload, "status")) : NULL;
             
-        } else if (status && strcmp(status, "TIMEOUT") == 0) {
-            // 虚拟时间超时
-            // 再检查一次本地fd（此时kernel_fds[1..]的revents可用）
+            if (phase2_status && strcmp(phase2_status, "SUCCESS") == 0) {
+                // 处理 ready_fds
+                json_t *ready_fds_array = json_object_get(phase2_payload, "ready_fds");
+                int des_ready_count = 0;
+                if (ready_fds_array && json_is_array(ready_fds_array)) {
+                    size_t array_size = json_array_size(ready_fds_array);
+                    for (size_t j = 0; j < array_size; j++) {
+                        json_t *fd_info = json_array_get(ready_fds_array, j);
+                        if (json_is_object(fd_info)) {
+                            json_t *fd_obj = json_object_get(fd_info, "fd");
+                            json_t *revents_obj = json_object_get(fd_info, "revents");
+                            if (fd_obj && revents_obj) {
+                                int ready_fd = json_integer_value(fd_obj);
+                                short ready_revents = (short)json_integer_value(revents_obj);
+                                for (nfds_t i = 0; i < nfds; i++) {
+                                    if (fds[i].fd == ready_fd) {
+                                        short filtered = ready_revents & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
+                                        fds[i].revents = filtered;
+                                        if (filtered != 0) des_ready_count++;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // 合并本地 fd（Phase2 期间可能也 ready 了）
+                for (nfds_t i = 0; i < non_des_count; i++) {
+                    if (kernel_fds[1 + i].revents != 0) {
+                        fds[non_des_orig_idx[i]].revents = kernel_fds[1 + i].revents;
+                    }
+                }
+                poll_result = des_ready_count + local_ready_count;
+            } else if (phase2_status && strcmp(phase2_status, "TIMEOUT") == 0) {
+                // 合并本地 fd
+                for (nfds_t i = 0; i < non_des_count; i++) {
+                    if (kernel_fds[1 + i].revents != 0) {
+                        fds[non_des_orig_idx[i]].revents = kernel_fds[1 + i].revents;
+                    }
+                }
+                poll_result = local_ready_count;
+            } else {
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() Phase2 DESD returned unexpected status: %s\n",
+                        my_router_id, phase2_status ? phase2_status : "NULL");
+                poll_result = 0;
+            }
+            if (phase2_payload) json_decref(phase2_payload);
+            
+        } else if (local_ready_count > 0) {
+            // 本地 fd 先 ready，DESD 还没响应
+            // ===== 同步 CANCEL 协议 =====
+            printf("[LIBDESHOOK-CANCEL] R%d T%d Phase2 local fd ready first, sending sync CANCEL for req=%s\n",
+                   my_router_id, get_current_thread_id(), saved_request_id);
+            
+            send_cancel_block_request(saved_request_id);
+            
+            Message cancel_response;
+            memset(&cancel_response, 0, sizeof(Message));
+            if (!recv_msg_from_desd_matching(saved_request_id, &cancel_response)) {
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d T%d failed to receive CANCELLED response for req=%s\n",
+                        my_router_id, get_current_thread_id(), saved_request_id);
+                free(kernel_fds);
+                if (non_des_fds) free(non_des_fds);
+                if (non_des_orig_idx) free(non_des_orig_idx);
+                errno = ECOMM;
+                return -1;
+            }
+            
+            json_t *cancel_payload = json_loads(cancel_response.payload.json_str, 0, &error);
+            const char *cancel_status = cancel_payload ? 
+                json_string_value(json_object_get(cancel_payload, "status")) : NULL;
+            
+            if (!cancel_status || strcmp(cancel_status, "CANCELLED") != 0) {
+                fprintf(stderr, "[LIBDESHOOK ERROR] R%d T%d expected CANCELLED response, got status=%s for req=%s\n",
+                        my_router_id, get_current_thread_id(), 
+                        cancel_status ? cancel_status : "NULL", saved_request_id);
+                if (cancel_payload) json_decref(cancel_payload);
+                free(kernel_fds);
+                if (non_des_fds) free(non_des_fds);
+                if (non_des_orig_idx) free(non_des_orig_idx);
+                errno = ECOMM;
+                return -1;
+            }
+            if (cancel_payload) json_decref(cancel_payload);
+            
+            printf("[LIBDESHOOK-CANCEL] R%d T%d received CANCELLED response for req=%s, returning local ready\n",
+                   my_router_id, get_current_thread_id(), saved_request_id);
+            
+            // 返回本地 ready 结果
             for (nfds_t i = 0; i < non_des_count; i++) {
                 if (kernel_fds[1 + i].revents != 0) {
                     fds[non_des_orig_idx[i]].revents = kernel_fds[1 + i].revents;
                 }
             }
             poll_result = local_ready_count;
-            if (resp_payload_obj) json_decref(resp_payload_obj);
-            
-        } else if (status && strcmp(status, "CANCELLED") == 0) {
-            // 阻塞请求被取消（不应该在这个分支发生，因为是DESD先响应）
-            poll_result = 0;
-            if (resp_payload_obj) json_decref(resp_payload_obj);
             
         } else {
-            fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() DESD returned error: %s\n", my_router_id,
-                    resp_payload_obj ? json_string_value(json_object_get(resp_payload_obj, "error_message")) : "Unknown");
-            if (resp_payload_obj) json_decref(resp_payload_obj);
-            free(kernel_fds);
-            if (non_des_fds) free(non_des_fds);
-            if (non_des_orig_idx) free(non_des_orig_idx);
-            errno = ECOMM;
-            return -1;
+            fprintf(stderr, "[LIBDESHOOK WARNING] R%d poll() Phase2 unexpected state: kernel_ready=%d but no fd ready\n",
+                    my_router_id, kernel_ready);
+            poll_result = 0;
         }
         
-    } else if (local_ready_count > 0) {
-        // 本地fd先ready，DESD还没响应
-        // ===== 同步 CANCEL 协议 =====
-        // 发送 CANCEL_BLOCK_REQUEST 并等待 DESD 的 CANCELLED 响应
-        // 确保 DESD 已清理内部阻塞状态后再返回给应用
-        printf("[LIBDESHOOK-CANCEL] R%d T%d local fd ready first, sending sync CANCEL for req=%s\n",
-               my_router_id, get_current_thread_id(), saved_request_id);
-        
-        send_cancel_block_request(saved_request_id);
-        
-        // 阻塞等待 DESD 的 CANCELLED 响应
-        Message cancel_response;
-        memset(&cancel_response, 0, sizeof(Message));
-        if (!recv_msg_from_desd_matching(saved_request_id, &cancel_response)) {
-            fprintf(stderr, "[LIBDESHOOK ERROR] R%d T%d failed to receive CANCELLED response for req=%s\n",
-                    my_router_id, get_current_thread_id(), saved_request_id);
-            free(kernel_fds);
-            if (non_des_fds) free(non_des_fds);
-            if (non_des_orig_idx) free(non_des_orig_idx);
-            errno = ECOMM;
-            return -1;
-        }
-        
-        // 验证响应状态
-        json_error_t json_err;
-        json_t *cancel_payload = json_loads(cancel_response.payload.json_str, 0, &json_err);
-        const char *cancel_status = cancel_payload ? 
-            json_string_value(json_object_get(cancel_payload, "status")) : NULL;
-        
-        if (!cancel_status || strcmp(cancel_status, "CANCELLED") != 0) {
-            fprintf(stderr, "[LIBDESHOOK ERROR] R%d T%d expected CANCELLED response, got status=%s for req=%s\n",
-                    my_router_id, get_current_thread_id(), 
-                    cancel_status ? cancel_status : "NULL", saved_request_id);
-            if (cancel_payload) json_decref(cancel_payload);
-            free(kernel_fds);
-            if (non_des_fds) free(non_des_fds);
-            if (non_des_orig_idx) free(non_des_orig_idx);
-            errno = ECOMM;
-            return -1;
-        }
-        if (cancel_payload) json_decref(cancel_payload);
-        
-        printf("[LIBDESHOOK-CANCEL] R%d T%d received CANCELLED response for req=%s, returning local ready\n",
-               my_router_id, get_current_thread_id(), saved_request_id);
-        
-        // DESD 已确认取消，现在安全地返回本地 ready 结果
-        for (nfds_t i = 0; i < nfds; i++) {
-            fds[i].revents = 0;
-        }
-        for (nfds_t i = 0; i < non_des_count; i++) {
-            if (kernel_fds[1 + i].revents != 0) {
-                fds[non_des_orig_idx[i]].revents = kernel_fds[1 + i].revents;
-            }
-        }
-        poll_result = local_ready_count;
+        free(kernel_fds);
         
     } else {
-        // 不应该到达这里（kernel_ready > 0 但既没有desd_ready也没有local_ready）
-        fprintf(stderr, "[LIBDESHOOK WARNING] R%d poll() unexpected state: kernel_ready=%d but no fd ready\n",
-                my_router_id, kernel_ready);
-        poll_result = 0;
+        // 未知的 Phase1 响应
+        fprintf(stderr, "[LIBDESHOOK ERROR] R%d poll() Phase1 DESD returned unexpected status: %s\n",
+                my_router_id, phase1_status ? phase1_status : "NULL");
+        if (phase1_payload) json_decref(phase1_payload);
+        if (non_des_fds) free(non_des_fds);
+        if (non_des_orig_idx) free(non_des_orig_idx);
+        errno = ECOMM;
+        return -1;
     }
 
-    free(kernel_fds);
     if (non_des_fds) free(non_des_fds);
     if (non_des_orig_idx) free(non_des_orig_idx);
     return poll_result;

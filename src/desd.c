@@ -1109,12 +1109,37 @@ static void dump_router_connections(int router_id, const char *tag) {
 }
 
 // --- Event Queue Management (Min-Heap Implementation) ---
-// 比较两个事件的优先级：先按 timestamp，再按 event_id（确保同时间戳事件按入队顺序处理）
+
+// 获取事件的 tier（同 VT 时的优先级）
+// Tier 0: ROUTER_BLOCK_REQUEST（Block 必须先于 Cancel）
+// Tier 1: CANCEL_BLOCK_REQUEST（Cancel 必须先于 Ready/Timeout）
+// Tier 2: 其它事件（默认优先级，包括 PACKET_RECEIVE_EVENT 等 ready 类事件）
+// Tier 3: TIMEOUT_EVENT（最低优先级）
+static int get_event_tier(EventType type) {
+    switch (type) {
+        case ROUTER_BLOCK_REQUEST:
+            return 0;  // Block 最先处理
+        case CANCEL_BLOCK_REQUEST:
+            return 1;  // Cancel 次之
+        case TIMEOUT_EVENT:
+            return 3;  // Timeout 最后
+        default:
+            return 2;  // 其它事件（ready 类）
+    }
+}
+
+// 比较两个事件的优先级：先按 timestamp，再按 tier，最后按 event_id
 static int event_less_than(const Event* a, const Event* b) {
     if (a->timestamp != b->timestamp) {
         return a->timestamp < b->timestamp;
     }
-    // 时间戳相同时，event_id 小的优先（先入队的先处理）
+    // 时间戳相同时，tier 小的优先
+    int tier_a = get_event_tier(a->event_type);
+    int tier_b = get_event_tier(b->event_type);
+    if (tier_a != tier_b) {
+        return tier_a < tier_b;
+    }
+    // 同 tier 时，event_id 小的优先（先入队的先处理）
     return a->event_id < b->event_id;
 }
 
@@ -1939,11 +1964,11 @@ void desd_event_loop() {
         }
 
         // 调试限制：达到 MAX_TOTAL_EVENTS 个事件后停止
-        if (current_event.event_id >= MAX_TOTAL_EVENTS/30) {
+        if (current_event.event_id >= MAX_TOTAL_EVENTS/3) {
             printf("[DESD-STOP] Reached %d events limit (EventID: %lu). Stopping simulation.\n",
-                   MAX_TOTAL_EVENTS/30, current_event.event_id);
+                   MAX_TOTAL_EVENTS/3, current_event.event_id);
             printf("[DESD-EXIT] Reason: Event limit reached (%d). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
-                   MAX_TOTAL_EVENTS/30, current_virtual_time, heartbeat_event_counter);
+                   MAX_TOTAL_EVENTS/3, current_virtual_time, heartbeat_event_counter);
             exit(0);
         }
 
@@ -3762,6 +3787,31 @@ void handle_router_block_request(Event event) {
                     printf("[DESD] R%d T%d blocked on %s (ReqID: %s) - infinite timeout.\n",
                            router_id, thread_id, blocked_func_str_local, request_id_local);
                 }
+
+                // ===== 两阶段协议：发送 ALLOW_POLL 响应 =====
+                // 告知 libdeshook：线程已标记为 BLOCKED，现在可以进入 Phase2 监听本地 fd
+                json_t *allow_poll_payload = json_object();
+                json_object_set_new(allow_poll_payload, "status", json_string("ALLOW_POLL"));
+                json_object_set_new(allow_poll_payload, "blocked_function", json_string("SELECT"));
+                json_object_set_new(allow_poll_payload, "message", json_string("Thread blocked, proceed to Phase2"));
+                char *allow_poll_str = json_dumps(allow_poll_payload, JSON_COMPACT);
+                json_decref(allow_poll_payload);
+                
+                Message allow_poll_response = {
+                    .message_type = DESD_TO_HOOK,
+                    .router_id = router_id,
+                    .thread_id = thread_id,
+                    .virtual_time = current_virtual_time
+                };
+                strncpy(allow_poll_response.request_id, request_id_local, 63);
+                allow_poll_response.request_id[63] = '\0';
+                strncpy(allow_poll_response.payload.json_str, allow_poll_str, MAX_MSG_SIZE - 1);
+                allow_poll_response.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
+                free(allow_poll_str);
+                
+                send_message_to_thread(router_id, thread_id, &allow_poll_response);
+                printf("[DESD] R%d T%d sent ALLOW_POLL for %s (ReqID: %s) at VT=%.3f\n",
+                       router_id, thread_id, blocked_func_str_local, request_id_local, current_virtual_time);
 
                 // 在 SELECT 阻塞时打印该路由器下所有线程的状态和监听的 fd，便于排查唤醒是否匹配
                 debug_dump_router_threads(router_id);
