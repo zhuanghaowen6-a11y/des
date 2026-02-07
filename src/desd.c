@@ -1507,8 +1507,6 @@ void drain_all_messages_nonblocking() {
                     if (ti) {
                         strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                         ti->blocked_on_request_id[63] = '\0';
-                        strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
-                        ti->blocked_on_function[63] = '\0';
                         ti->status = BLOCKED;
                     }
                     pthread_mutex_unlock(&router_states_mutex);
@@ -1561,8 +1559,6 @@ void drain_all_messages_nonblocking() {
                     if (ti) {
                         strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                         ti->blocked_on_request_id[63] = '\0';
-                        strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
-                        ti->blocked_on_function[63] = '\0';
                         ti->status = BLOCKED;
                     }
                     pthread_mutex_unlock(&router_states_mutex);
@@ -1764,8 +1760,6 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
                 if (ti) {
                     strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                     ti->blocked_on_request_id[63] = '\0';
-                    strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
-                    ti->blocked_on_function[63] = '\0';
                     ti->status = BLOCKED;
                 }
                 pthread_mutex_unlock(&router_states_mutex);
@@ -1795,8 +1789,6 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
                 if (ti) {
                     strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                     ti->blocked_on_request_id[63] = '\0';
-                    strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
-                    ti->blocked_on_function[63] = '\0';
                     ti->status = BLOCKED;
                 }
                 pthread_mutex_unlock(&router_states_mutex);
@@ -1880,8 +1872,6 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
             if (ti) {
                 strncpy(ti->blocked_on_request_id, msg.request_id, 63);
                 ti->blocked_on_request_id[63] = '\0';
-                strncpy(ti->blocked_on_function, event_type_to_string(msg.event_type), 63);
-                ti->blocked_on_function[63] = '\0';
                 ti->status = BLOCKED;
             }
             pthread_mutex_unlock(&router_states_mutex);
@@ -2242,12 +2232,11 @@ void handle_listen_event(Event event) {
             if (ti_err && ti_err->status == BLOCKED) {
                 ti_err->status = RUNNING;
                 ti_err->blocked_on_request_id[0] = '\0';
-                ti_err->blocked_on_function[0] = '\0';
             }
             pthread_mutex_unlock(&router_states_mutex);
             return;
         }
-
+        
         // 检查是否已存在该地址（避免重复）
         for (int i = 0; i < router_states[router_id].listen_count; i++) {
             if (strcmp(router_states[router_id].listen_addresses[i], listen_address_local) == 0) {
@@ -2260,7 +2249,6 @@ void handle_listen_event(Event event) {
                 if (ti_dup && ti_dup->status == BLOCKED) {
                     ti_dup->status = RUNNING;
                     ti_dup->blocked_on_request_id[0] = '\0';
-                    ti_dup->blocked_on_function[0] = '\0';
                 }
                 pthread_mutex_unlock(&router_states_mutex);
                 return;
@@ -2268,10 +2256,10 @@ void handle_listen_event(Event event) {
         }
         
         // 添加新的监听地址和socket_fd
-        int listen_index = router_states[router_id].listen_count;
-        strncpy(router_states[router_id].listen_addresses[listen_index], listen_address_local, 255);
-        router_states[router_id].listen_addresses[listen_index][255] = '\0';
-        router_states[router_id].listening_socket_fds[listen_index] = socket_fd;
+        int index = router_states[router_id].listen_count;
+        strncpy(router_states[router_id].listen_addresses[index], listen_address_local, 255);
+        router_states[router_id].listen_addresses[index][255] = '\0';
+        router_states[router_id].listening_socket_fds[index] = socket_fd;
         router_states[router_id].listen_count++;
         
         // LISTEN事件信息已在下面显示，移除DEBUG输出
@@ -2290,7 +2278,6 @@ void handle_listen_event(Event event) {
             if (strncmp(ti->blocked_on_request_id, request_id, 63) == 0) {
                 ti->status = RUNNING;
                 ti->blocked_on_request_id[0] = '\0';
-                ti->blocked_on_function[0] = '\0';
             }
         }
         pthread_mutex_unlock(&router_states_mutex);
@@ -2637,6 +2624,10 @@ void handle_connection_established_event(Event event) {
                 printf("[DESD] R%d (server) accept() completed due to connection from R%d.\n", 
                        router_id, client_router_id);
                 send_success_response(router_id, server_ti->thread_id, router_request_id, "ACCEPT", "Connection Established", NULL);
+                
+                // 记录被唤醒的线程，供 event loop 在处理完 CONNECTION_ESTABLISHED_EVENT 后进入 interact
+                router_states[router_id].select_wakeup_pending = 1;
+                router_states[router_id].select_wakeup_thread_id = server_ti->thread_id;
             } else {
                 // 连接已经建立，但路由器还没有调用 accept()，加入FIFO队列
                 if (router_states[router_id].pending_connections_count >= MAX_PENDING_PACKETS) {
@@ -2835,7 +2826,6 @@ void handle_connection_info_event(Event event) {
         if (ti_fail && ti_fail->status == BLOCKED) {
             ti_fail->status = RUNNING;
             ti_fail->blocked_on_request_id[0] = '\0';
-            ti_fail->blocked_on_function[0] = '\0';
         }
         pthread_mutex_unlock(&router_states_mutex);
         return;
@@ -3070,7 +3060,6 @@ void handle_connection_info_event(Event event) {
         if (strncmp(ti->blocked_on_request_id, request_id, 63) == 0) {
             ti->status = RUNNING;
             ti->blocked_on_request_id[0] = '\0';
-            ti->blocked_on_function[0] = '\0';
         }
     }
     pthread_mutex_unlock(&router_states_mutex);
@@ -3234,7 +3223,6 @@ void handle_close_socket_event(Event event) {
         if (strncmp(ti->blocked_on_request_id, request_id, 63) == 0) {
             ti->status = RUNNING;
             ti->blocked_on_request_id[0] = '\0';
-            ti->blocked_on_function[0] = '\0';
         }
     }
     pthread_mutex_unlock(&router_states_mutex);
@@ -3556,127 +3544,128 @@ void handle_router_block_request(Event event) {
             for (int i = 0; i < monitored_tmp_count; i++) {
                 int fd = monitored_fd_tmp[i];
                 int events = monitored_events_tmp[i];
-                int revents = 0;
-                
-                // 检查 POLLIN：是否有数据可读或有新连接待accept
-                if (events & 0x001) {  // POLLIN = 0x001
-                    // 1. 检查是否有数据包可读
-                    int head = router_states[router_id].pending_buffer_head;
-                    int count = router_states[router_id].pending_packets_count;
                     
-                    for (int j = 0; j < count; j++) {
-                        int idx = (head + j) % MAX_PENDING_PACKETS;
-                        int buf_idx = router_states[router_id].pending_buffer_indices[idx];
-                        if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS &&
-                            router_states[router_id].packet_buffers[buf_idx].is_used &&
-                            router_states[router_id].packet_buffers[buf_idx].socket_fd == fd) {
-                            revents |= 0x001;  // POLLIN - 数据可读
-                            break;
-                        }
-                    }
+                    int revents = 0;
                     
-                    // 2. 检查是否是listening socket且有pending连接
-                    if (!(revents & 0x001)) {  // 如果还没有设置POLLIN
-                        for (int j = 0; j < router_states[router_id].listen_count; j++) {
-                            if (router_states[router_id].listening_socket_fds[j] == fd) {
-                                // 这是一个listening socket
-                                printf("[DEBUG-LISTEN] R%d fd=%d is listening socket (listen_idx=%d), pending=%d\n",
-                                       router_id, fd, j, router_states[router_id].pending_connections_count);
-                                if (router_states[router_id].pending_connections_count > 0) {
-                                    revents |= 0x001;  // POLLIN - 新连接待accept
-                                    printf("[DEBUG-LISTEN] R%d fd=%d set POLLIN due to %d pending connection(s)\n",
-                                           router_id, fd, router_states[router_id].pending_connections_count);
-                                    break;
-                                }
+                    // 检查 POLLIN：是否有数据可读或有新连接待accept
+                    if (events & 0x001) {  // POLLIN = 0x001
+                        // 1. 检查是否有数据包可读
+                        int head = router_states[router_id].pending_buffer_head;
+                        int count = router_states[router_id].pending_packets_count;
+                        
+                        for (int j = 0; j < count; j++) {
+                            int idx = (head + j) % MAX_PENDING_PACKETS;
+                            int buf_idx = router_states[router_id].pending_buffer_indices[idx];
+                            if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS &&
+                                router_states[router_id].packet_buffers[buf_idx].is_used &&
+                                router_states[router_id].packet_buffers[buf_idx].socket_fd == fd) {
+                                revents |= 0x001;  // POLLIN - 数据可读
+                                break;
                             }
                         }
-                    }
-                }
-                
-                // 检查 POLLOUT：socket 是否可写（仅对已知的活动连接fd生效）
-                if (events & 0x004) {  // POLLOUT = 0x004
-                    // 查找该 fd 的连接信息
-                    for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
-                        if (router_states[router_id].connections[j].is_active &&
-                            router_states[router_id].connections[j].socket_fd == fd) {
-                            // 连接存在且活跃，socket 可写
-                            revents |= 0x004;  // POLLOUT
-                            break;
-                        }
-                    }
-                    // 未找到的fd（非DES管理的fd）不设置任何就绪位，避免误唤醒
-                }
-                
-                // 检查 POLLERR/POLLHUP：仅对已知连接fd设置
-                for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
-                    if (router_states[router_id].connections[j].socket_fd == fd) {
-                        if (!router_states[router_id].connections[j].is_active) {
-                            revents |= 0x010;  // POLLHUP - 连接已断开
-                        }
-                        break;
-                    }
-                }
-                
-                // 如果有任何事件就绪，按更严格的条件将其添加到结果列表
-                if (revents != 0) {
-                    // 关键过滤：
-                    // 1) 仅当是监听socket且pending_connections>0的POLLIN才算就绪
-                    // 2) 或者是数据socket：
-                    //    - 有对应pending_packets的POLLIN
-                    //    - 已知活跃连接fd的POLLOUT
-                    // 3) 不因未知fd的HUP/ERR而唤醒
-                    int eligible = 0;
-                    // 判断是否监听socket
-                    int is_listen_fd = 0;
-                    for (int j = 0; j < router_states[router_id].listen_count; j++) {
-                        if (router_states[router_id].listening_socket_fds[j] == fd) {
-                            is_listen_fd = 1; break;
-                        }
-                    }
-
-                    if ((revents & 0x001) && (events & 0x001) && is_listen_fd && router_states[router_id].pending_connections_count > 0) {
-                        // 监听socket有待accept连接
-                        eligible = 1;
-                    } else {
-                        // 非监听：检查是否数据socket
-                        int is_known_conn_fd = 0;
-                        for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
-                            if (router_states[router_id].connections[j].is_active &&
-                                router_states[router_id].connections[j].socket_fd == fd) {
-                                is_known_conn_fd = 1; break;
-                            }
-                        }
-                        if (is_known_conn_fd) {
-                            if ((revents & 0x004) && (events & 0x004)) {
-                                // 已知连接上的POLLOUT
-                                eligible = 1;
-                            } else if ((revents & 0x001) && (events & 0x001)) {
-                                // 已知连接上的POLLIN需确认确有数据（pending_packets匹配该fd，且is_used=1）
-                                int head = router_states[router_id].pending_buffer_head;
-                                int count = router_states[router_id].pending_packets_count;
-                                for (int j = 0; j < count; j++) {
-                                    int idx = (head + j) % MAX_PENDING_PACKETS;
-                                    int buf_idx = router_states[router_id].pending_buffer_indices[idx];
-                                    if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS &&
-                                        router_states[router_id].packet_buffers[buf_idx].is_used &&
-                                        router_states[router_id].packet_buffers[buf_idx].socket_fd == fd) {
-                                        eligible = 1; break;
+                        
+                        // 2. 检查是否是listening socket且有pending连接
+                        if (!(revents & 0x001)) {  // 如果还没有设置POLLIN
+                            for (int j = 0; j < router_states[router_id].listen_count; j++) {
+                                if (router_states[router_id].listening_socket_fds[j] == fd) {
+                                    // 这是一个listening socket
+                                    printf("[DEBUG-LISTEN] R%d fd=%d is listening socket (listen_idx=%d), pending=%d\n",
+                                           router_id, fd, j, router_states[router_id].pending_connections_count);
+                                    if (router_states[router_id].pending_connections_count > 0) {
+                                        revents |= 0x001;  // POLLIN - 新连接待accept
+                                        printf("[DEBUG-LISTEN] R%d fd=%d set POLLIN due to %d pending connection(s)\n",
+                                               router_id, fd, router_states[router_id].pending_connections_count);
+                                        break;
                                     }
                                 }
                             }
                         }
                     }
-
-                    if (eligible) {
-                        json_t *ready_fd_info = json_object();
-                        json_object_set_new(ready_fd_info, "fd", json_integer(fd));
-                        json_object_set_new(ready_fd_info, "revents", json_integer(revents));
-                        json_array_append_new(ready_fds_array, ready_fd_info);
-                        has_ready_fds = 1;
-                        printf("[DEBUG-SELECT-READY] R%d add ready fd=%d revents=0x%x (listen=%d, pending_conn=%d)\n",
-                               router_id, fd, revents, is_listen_fd, router_states[router_id].pending_connections_count);
+                    
+                    // 检查 POLLOUT：socket 是否可写（仅对已知的活动连接fd生效）
+                    if (events & 0x004) {  // POLLOUT = 0x004
+                        // 查找该 fd 的连接信息
+                        for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                            if (router_states[router_id].connections[j].is_active &&
+                                router_states[router_id].connections[j].socket_fd == fd) {
+                                // 连接存在且活跃，socket 可写
+                                revents |= 0x004;  // POLLOUT
+                                break;
+                            }
+                        }
+                        // 未找到的fd（非DES管理的fd）不设置任何就绪位，避免误唤醒
                     }
-                }
+                    
+                    // 检查 POLLERR/POLLHUP：仅对已知连接fd设置
+                    for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                        if (router_states[router_id].connections[j].socket_fd == fd) {
+                            if (!router_states[router_id].connections[j].is_active) {
+                                revents |= 0x010;  // POLLHUP - 连接已断开
+                            }
+                            break;
+                        }
+                    }
+                    
+                    // 如果有任何事件就绪，按更严格的条件将其添加到结果列表
+                    if (revents != 0) {
+                        // 关键过滤：
+                        // 1) 仅当是监听socket且pending_connections>0的POLLIN才算就绪
+                        // 2) 或者是数据socket：
+                        //    - 有对应pending_packets的POLLIN
+                        //    - 已知活跃连接fd的POLLOUT
+                        // 3) 不因未知fd的HUP/ERR而唤醒
+                        int eligible = 0;
+                        // 判断是否监听socket
+                        int is_listen_fd = 0;
+                        for (int j = 0; j < router_states[router_id].listen_count; j++) {
+                            if (router_states[router_id].listening_socket_fds[j] == fd) {
+                                is_listen_fd = 1; break;
+                            }
+                        }
+
+                        if ((revents & 0x001) && (events & 0x001) && is_listen_fd && router_states[router_id].pending_connections_count > 0) {
+                            // 监听socket有待accept连接
+                            eligible = 1;
+                        } else {
+                            // 非监听：检查是否数据socket
+                            int is_known_conn_fd = 0;
+                            for (int j = 0; j < MAX_CONNECTIONS_PER_ROUTER; j++) {
+                                if (router_states[router_id].connections[j].is_active &&
+                                    router_states[router_id].connections[j].socket_fd == fd) {
+                                    is_known_conn_fd = 1; break;
+                                }
+                            }
+                            if (is_known_conn_fd) {
+                                if ((revents & 0x004) && (events & 0x004)) {
+                                    // 已知连接上的POLLOUT
+                                    eligible = 1;
+                                } else if ((revents & 0x001) && (events & 0x001)) {
+                                    // 已知连接上的POLLIN需确认确有数据（pending_packets匹配该fd，且is_used=1）
+                                    int head = router_states[router_id].pending_buffer_head;
+                                    int count = router_states[router_id].pending_packets_count;
+                                    for (int j = 0; j < count; j++) {
+                                        int idx = (head + j) % MAX_PENDING_PACKETS;
+                                        int buf_idx = router_states[router_id].pending_buffer_indices[idx];
+                                        if (buf_idx >= 0 && buf_idx < MAX_PENDING_PACKETS &&
+                                            router_states[router_id].packet_buffers[buf_idx].is_used &&
+                                            router_states[router_id].packet_buffers[buf_idx].socket_fd == fd) {
+                                            eligible = 1; break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (eligible) {
+                            json_t *ready_fd_info = json_object();
+                            json_object_set_new(ready_fd_info, "fd", json_integer(fd));
+                            json_object_set_new(ready_fd_info, "revents", json_integer(revents));
+                            json_array_append_new(ready_fds_array, ready_fd_info);
+                            has_ready_fds = 1;
+                            printf("[DEBUG-SELECT-READY] R%d add ready fd=%d revents=0x%x (listen=%d, pending_conn=%d)\n",
+                                   router_id, fd, revents, is_listen_fd, router_states[router_id].pending_connections_count);
+                        }
+                    }
             }
             
             // 如果有就绪的 FD，立即唤醒
@@ -4120,6 +4109,10 @@ void handle_packet_receive_event(Event event) {
                 }
                 
                 printf("[DESD] R%d T%d was blocked on recv and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, blocked_ti->thread_id, destination_abstract_address);
+                
+                // 记录被唤醒的线程，供 event loop 在处理完 PACKET_RECEIVE_EVENT 后进入 interact
+                router_states[target_router_id].select_wakeup_pending = 1;
+                router_states[target_router_id].select_wakeup_thread_id = blocked_ti->thread_id;
             } else if (strcmp(blocked_func, "SELECT_CALL") == 0) {
                 // 情况1b：接收方在 select 上等待
                 // 注意：此时blocked_ti已经是通过find_blocked_select_thread_by_fd找到的正确线程
@@ -4238,6 +4231,10 @@ void handle_packet_receive_event(Event event) {
                 
                 printf("[DESD] R%d T%d was blocked on select and now awakened by PACKET_RECEIVE_EVENT for %s (buffer_index=%d added to pending queue, %zu unique FDs).\n", 
                        target_router_id, blocked_ti->thread_id, destination_abstract_address, buffer_index, ready_fds_count);
+                
+                // 记录被唤醒的线程，供 event loop 在处理完 PACKET_RECEIVE_EVENT 后进入 interact
+                router_states[target_router_id].select_wakeup_pending = 1;
+                router_states[target_router_id].select_wakeup_thread_id = blocked_ti->thread_id;
             } else {
                 // 其他阻塞类型（理论上不应到达此分支，因为我们只找RECV/SELECT线程），记录为 pending
                 router_states[target_router_id].pending_packets_count++;
@@ -4320,6 +4317,10 @@ void handle_timeout_event(Event event) {
             send_timeout_response(router_id, timeout_ti->thread_id, original_block_request_id, timeout_type[0] != '\0' ? timeout_type : "UNKNOWN");
             printf("[DESD-Timeout] R%d timed out for request %s (Type: %s) at VT=%.3f.\n", router_id, original_block_request_id, timeout_type[0] != '\0' ? timeout_type : "UNKNOWN", current_virtual_time);
         }
+        
+        // 记录被唤醒的线程，供 event loop 在处理完 TIMEOUT_EVENT 后进入 interact
+        router_states[router_id].select_wakeup_pending = 1;
+        router_states[router_id].select_wakeup_thread_id = timeout_ti->thread_id;
     } else {
         printf("[DESD-Timeout] TIMEOUT_EVENT %lu for R%d ignored (router not blocked on this request %s anymore or already handled).\n",
                event.event_id, router_id, original_block_request_id[0] != '\0' ? original_block_request_id : "UNKNOWN");
@@ -4590,7 +4591,6 @@ void handle_get_virtual_time_event(Event event) {
         if (strncmp(ti->blocked_on_request_id, request_id_local, 63) == 0) {
             ti->status = RUNNING;
             ti->blocked_on_request_id[0] = '\0';
-            ti->blocked_on_function[0] = '\0';
         }
     }
     pthread_mutex_unlock(&router_states_mutex);
