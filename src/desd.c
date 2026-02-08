@@ -61,6 +61,7 @@ typedef struct {
     size_t data_len;             // 数据长度
     int socket_fd;               // 对应的 socket 文件描述符
     int is_used;                 // 是否被使用
+    uint64_t gen;                // 版本号，用于检测 stale PACKET_RECEIVE_EVENT
 } PacketBuffer;
 
 // FIFO队列：记录pending connection的客户端信息
@@ -887,6 +888,7 @@ void init_desd() {
             router_states[i].packet_buffers[j].is_used = 0;
             router_states[i].packet_buffers[j].data_len = 0;
             router_states[i].packet_buffers[j].socket_fd = -1;
+            router_states[i].packet_buffers[j].gen = 0;  // 初始化版本号
             memset(router_states[i].packet_buffers[j].data, 0, MAX_PACKET_SIZE);
             router_states[i].pending_buffer_indices[j] = -1;
         }
@@ -3184,9 +3186,11 @@ void handle_close_socket_event(Event event) {
     for (int i = 0; i < MAX_PENDING_PACKETS; i++) {
         if (router_states[router_id].packet_buffers[i].is_used &&
             router_states[router_id].packet_buffers[i].socket_fd == socket_fd) {
-            printf("[DESD] Clearing pending packet buffer %d for R%d fd %d\n", i, router_id, socket_fd);
+            printf("[DESD] Clearing pending packet buffer %d for R%d fd %d (gen was %lu)\n", 
+                   i, router_id, socket_fd, (unsigned long)router_states[router_id].packet_buffers[i].gen);
             router_states[router_id].packet_buffers[i].is_used = 0;
             router_states[router_id].packet_buffers[i].socket_fd = -1;
+            router_states[router_id].packet_buffers[i].gen++;  // 递增版本号，使 in-flight 事件失效
             memset(router_states[router_id].packet_buffers[i].data, 0, MAX_PACKET_SIZE);
             cleared_buffers++;
         }
@@ -4031,6 +4035,9 @@ void handle_packet_send_event(Event event) {
     router_states[target_router_id].packet_buffers[buffer_index].data_len = strlen(packet_data);
     router_states[target_router_id].packet_buffers[buffer_index].socket_fd = target_socket_fd;
     router_states[target_router_id].packet_buffers[buffer_index].is_used = 1;
+    // 递增版本号，用于检测 stale PACKET_RECEIVE_EVENT
+    router_states[target_router_id].packet_buffers[buffer_index].gen++;
+    uint64_t current_gen = router_states[target_router_id].packet_buffers[buffer_index].gen;
 
     // 构造更清晰的描述信息，使用路由器ID和socket fd而不是旧的destination_abstract_address
     char connection_desc[256];
@@ -4041,6 +4048,7 @@ void handle_packet_send_event(Event event) {
     json_object_set_new(recv_payload_obj, "source_router_id", json_integer(source_router_id));
     json_object_set_new(recv_payload_obj, "destination_abstract_address", json_string(connection_desc));
     json_object_set_new(recv_payload_obj, "buffer_index", json_integer(buffer_index));  // 传递缓冲区索引
+    json_object_set_new(recv_payload_obj, "buffer_gen", json_integer((json_int_t)current_gen));  // 传递版本号
     char *recv_payload_str = json_dumps(recv_payload_obj, JSON_COMPACT);
     json_decref(recv_payload_obj);
 
@@ -4070,6 +4078,7 @@ void handle_packet_receive_event(Event event) {
     }
     const char *destination_abstract_address_ptr = json_string_value(json_object_get(payload_obj, "destination_abstract_address"));
     int buffer_index = json_integer_value(json_object_get(payload_obj, "buffer_index"));
+    uint64_t expected_gen = (uint64_t)json_integer_value(json_object_get(payload_obj, "buffer_gen"));
     
     // 复制到本地缓冲区，防止 json_decref 后访问无效内存
     char destination_abstract_address[256] = {0};
@@ -4080,15 +4089,24 @@ void handle_packet_receive_event(Event event) {
     json_decref(payload_obj);
 
     if (target_router_id > 0 && target_router_id <= MAX_ROUTERS) {
-        // 先获取数据包对应的socket_fd，用于精确选择要唤醒的线程
-        int packet_socket_fd = -1;
-        if (buffer_index >= 0 && buffer_index < MAX_PENDING_PACKETS &&
-            router_states[target_router_id].packet_buffers[buffer_index].is_used) {
-            packet_socket_fd = router_states[target_router_id].packet_buffers[buffer_index].socket_fd;
+        // 校验 (buffer_index, gen)：检测 stale PACKET_RECEIVE_EVENT
+        int is_valid_index = (buffer_index >= 0 && buffer_index < MAX_PENDING_PACKETS);
+        int is_used = is_valid_index ? router_states[target_router_id].packet_buffers[buffer_index].is_used : 0;
+        uint64_t actual_gen = is_valid_index ? router_states[target_router_id].packet_buffers[buffer_index].gen : 0;
+        
+        if (!is_valid_index || !is_used || actual_gen != expected_gen) {
+            // Stale event: slot 已被 close 清理或被复用装了新包，直接丢弃
+            printf("[DESD-STALE] R%d dropping stale PACKET_RECEIVE_EVENT for %s (buffer_index=%d, expected_gen=%lu, actual_gen=%lu, is_used=%d).\n",
+                   target_router_id, destination_abstract_address, buffer_index, 
+                   (unsigned long)expected_gen, (unsigned long)actual_gen, is_used);
+            return;  // 绝对不能入 pending，直接丢弃
         }
         
-        printf("[DESD] R%d received PACKET_RECEIVE_EVENT for %s (buffer_index=%d, packet_socket_fd=%d).\n",
-               target_router_id, destination_abstract_address, buffer_index, packet_socket_fd);
+        // 通过校验，获取数据包对应的socket_fd，用于精确选择要唤醒的线程
+        int packet_socket_fd = router_states[target_router_id].packet_buffers[buffer_index].socket_fd;
+        
+        printf("[DESD] R%d received PACKET_RECEIVE_EVENT for %s (buffer_index=%d, packet_socket_fd=%d, gen=%lu).\n",
+               target_router_id, destination_abstract_address, buffer_index, packet_socket_fd, (unsigned long)actual_gen);
 
         // 每个包到达时打印一下该 router 下所有线程的状态和阻塞信息，帮助确认应被唤醒的线程
         debug_dump_router_threads(target_router_id);
@@ -4154,8 +4172,9 @@ void handle_packet_receive_event(Event event) {
                     free(payload_str);
                     send_message_to_router(target_router_id, &response);
                     
-                    // 释放缓冲区
+                    // 释放缓冲区：清 is_used、socket_fd，递增 gen 防止复用时误匹配
                     router_states[target_router_id].packet_buffers[buffer_index].is_used = 0;
+                    router_states[target_router_id].packet_buffers[buffer_index].socket_fd = -1;
                 }
                 
                 printf("[DESD] R%d T%d was blocked on recv and now awakened by PACKET_RECEIVE_EVENT for %s.\n", target_router_id, blocked_ti->thread_id, destination_abstract_address);
