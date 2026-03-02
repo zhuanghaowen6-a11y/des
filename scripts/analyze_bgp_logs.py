@@ -229,12 +229,71 @@ def analyze_bird_log(log_path, router_id, expected_peers):
     return result
 
 
+def get_fat_tree_k6_neighbors(router_id):
+    """获取 fat-tree k=6 拓扑中某路由器的邻居列表。
+    
+    Fat-tree k=6 拓扑（45 台路由器）:
+      Core:  R1..R9   (9 台，分为 3 组，每组 3 台)
+      Agg:   R10..R27 (18 台，6 个 pod，每 pod 3 台)
+      ToR:   R28..R45 (18 台，6 个 pod，每 pod 3 台)
+    
+    编号规则:
+      core_id(group=g, idx=x) = 1 + g*3 + x  (g,x in 0..2)
+      agg_id(pod=p, a=0..2)   = 10 + p*3 + a (p in 0..5)
+      tor_id(pod=p, e=0..2)   = 28 + p*3 + e (p in 0..5)
+    
+    连接规则:
+      Pod 内: ToR(e) <-> 该 pod 的全部 Agg(0..2)
+      Pod 上行: Agg(a) <-> Core group=a 的全部 3 台
+    """
+    neighbors = []
+    
+    if router_id <= 9:
+        # Core router: R1..R9
+        # core_id = 1 + group*3 + idx => group = (router_id - 1) // 3
+        group = (router_id - 1) // 3
+        # Core(group) connects to Agg(a=group) in each pod
+        # agg_id(pod=p, a=group) = 10 + p*3 + group
+        for pod in range(6):
+            agg_id = 10 + pod * 3 + group
+            neighbors.append(agg_id)
+    
+    elif router_id <= 27:
+        # Aggregation router: R10..R27
+        # agg_id = 10 + pod*3 + a => pod = (router_id - 10) // 3, a = (router_id - 10) % 3
+        pod = (router_id - 10) // 3
+        a = (router_id - 10) % 3
+        
+        # Connect to Core group=a (all 3 cores in that group)
+        for idx in range(3):
+            core_id = 1 + a * 3 + idx
+            neighbors.append(core_id)
+        
+        # Connect to all ToRs in the same pod
+        for e in range(3):
+            tor_id = 28 + pod * 3 + e
+            neighbors.append(tor_id)
+    
+    else:
+        # ToR router: R28..R45
+        # tor_id = 28 + pod*3 + e => pod = (router_id - 28) // 3
+        pod = (router_id - 28) // 3
+        
+        # Connect to all Aggs in the same pod
+        for a in range(3):
+            agg_id = 10 + pod * 3 + a
+            neighbors.append(agg_id)
+    
+    return neighbors
+
+
 def build_expected_peers(num_routers, topology_mode):
     """根据拓扑模式构造每个路由器的期望邻居列表。
 
     拓扑模式支持：
     - 'full-mesh': 每个路由器与其他所有路由器建立会话
     - 'ring': 每个路由器只与前后两个邻居建立会话（环形），NUM_ROUTERS=2 时只有一个邻居
+    - 'fat-tree-k6': fat-tree k=6 拓扑（45 台路由器）
     """
 
     peers_per_router = {}
@@ -254,6 +313,12 @@ def build_expected_peers(num_routers, topology_mode):
                 neighbors = [f"r{left}", f"r{right}"]
 
             peers_per_router[router_id] = neighbors
+
+    elif topology_mode == "fat-tree-k6":
+        # Fat-tree k=6: 45 routers
+        for router_id in range(1, 46):
+            neighbor_ids = get_fat_tree_k6_neighbors(router_id)
+            peers_per_router[router_id] = [f"r{n}" for n in neighbor_ids]
 
     else:  # 默认 full-mesh
         all_peers = [f"r{i}" for i in range(1, num_routers + 1)]
@@ -302,6 +367,11 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
             total_expected = 2  # r1<->r2，各算一次
         else:
             total_expected = num_routers * 2  # 每个路由器有两个邻居
+    elif topology_mode == "fat-tree-k6":
+        # Fat-tree k=6: Core有6邻居, Agg有6邻居, ToR有3邻居
+        # Core: 9 * 6 = 54, Agg: 18 * 6 = 108, ToR: 18 * 3 = 54
+        # 总有向会话数 = 54 + 108 + 54 = 216
+        total_expected = 9 * 6 + 18 * 6 + 18 * 3  # 216
     else:
         total_expected = num_routers * (num_routers - 1)  # full-mesh
     total_established = 0
@@ -381,7 +451,8 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
     # 3. 总结
     print_header("3. 测试结果总结")
     
-    topo_label = "Full-Mesh" if topology_mode == "full-mesh" else "Ring"
+    topo_labels = {"full-mesh": "Full-Mesh", "ring": "Ring", "fat-tree-k6": "Fat-Tree k=6"}
+    topo_label = topo_labels.get(topology_mode, topology_mode)
     print(f"\n{Colors.BOLD}会话统计 ({topo_label}):{Colors.END}")
     print(f"  期望会话数: {total_expected}")
     print(f"  成功建立数: {total_established}")
@@ -430,8 +501,8 @@ def main():
     topo_from_arg = sys.argv[3] if len(sys.argv) >= 4 else None
     topo_from_env = os.environ.get("TOPOLOGY_MODE")
     topology_mode = (topo_from_arg or topo_from_env or "full-mesh").lower()
-    if topology_mode not in ("full-mesh", "ring"):
-        print(f"错误: 不支持的拓扑模式: {topology_mode} (期望: full-mesh 或 ring)")
+    if topology_mode not in ("full-mesh", "ring", "fat-tree-k6"):
+        print(f"错误: 不支持的拓扑模式: {topology_mode} (期望: full-mesh, ring 或 fat-tree-k6)")
         sys.exit(1)
     
     if not os.path.isdir(log_dir):

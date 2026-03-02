@@ -19,9 +19,15 @@ TEST_DURATION=${2:-60}
 TOPOLOGY_MODE=${TOPOLOGY_MODE:-${3:-ring}}
 TOPOLOGY_MODE=${TOPOLOGY_MODE,,}
 
-if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ]; then
-    echo "[ERROR] TOPOLOGY_MODE must be 'ring' or 'full-mesh'"
+if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k6" ]; then
+    echo "[ERROR] TOPOLOGY_MODE must be 'ring', 'full-mesh', or 'fat-tree-k6'"
     exit 1
+fi
+
+# Fat-tree k=6 forces NUM_ROUTERS=45
+if [ "$TOPOLOGY_MODE" = "fat-tree-k6" ]; then
+    NUM_ROUTERS=45
+    echo "[INFO] Fat-tree k=6 topology: forcing NUM_ROUTERS=45"
 fi
 
 if [ "$NUM_ROUTERS" -lt 2 ] || [ "$NUM_ROUTERS" -gt 250 ]; then
@@ -35,7 +41,7 @@ echo "Routers: $NUM_ROUTERS"
 echo "Test Duration: ${TEST_DURATION}s"
 echo "KEEP_ENV: $KEEP_ENV (1=保留环境, 0=自动清理)"
 echo "ENABLE_STRACE: $ENABLE_STRACE (1=开启strace, 0=关闭)"
-echo "TOPOLOGY_MODE: $TOPOLOGY_MODE (ring/full-mesh)"
+echo "TOPOLOGY_MODE: $TOPOLOGY_MODE (ring/full-mesh/fat-tree-k6)"
 echo "=========================================="
 
 # 日志函数
@@ -118,11 +124,84 @@ make clean && make
 log_info "✓ 编译完成"
 
 log_step "步骤2: 生成BIRD配置文件"
+
+# ============================================================
+# Fat-tree k=6 拓扑说明（45 台路由器）:
+#   Core:  R1..R9   (9 台，分为 3 组，每组 3 台)
+#   Agg:   R10..R27 (18 台，6 个 pod，每 pod 3 台)
+#   ToR:   R28..R45 (18 台，6 个 pod，每 pod 3 台)
+#
+# 编号规则:
+#   core_id(group=g, idx=x) = 1 + g*3 + x  (g,x in 0..2)
+#   agg_id(pod=p, a=0..2)   = 10 + p*3 + a (p in 0..5)
+#   tor_id(pod=p, e=0..2)   = 28 + p*3 + e (p in 0..5)
+#
+# 连接规则:
+#   Pod 内: ToR(e) <-> 该 pod 的全部 Agg(0..2)
+#   Pod 上行: Agg(a) <-> Core group=a 的全部 3 台
+# ============================================================
+
+# 辅助函数：获取 fat-tree k=6 拓扑中某路由器的邻居列表
+get_fat_tree_k6_neighbors() {
+    local router_id=$1
+    local neighbors=""
+
+    if [ $router_id -le 9 ]; then
+        # Core router: R1..R9
+        # core_id = 1 + group*3 + idx => group = (router_id - 1) / 3
+        local group=$(( (router_id - 1) / 3 ))
+        # Core(group) connects to Agg(a=group) in each pod
+        # agg_id(pod=p, a=group) = 10 + p*3 + group
+        for pod in $(seq 0 5); do
+            local agg_id=$((10 + pod * 3 + group))
+            neighbors="$neighbors $agg_id"
+        done
+
+    elif [ $router_id -le 27 ]; then
+        # Aggregation router: R10..R27
+        # agg_id = 10 + pod*3 + a => pod = (router_id - 10) / 3, a = (router_id - 10) % 3
+        local pod=$(( (router_id - 10) / 3 ))
+        local a=$(( (router_id - 10) % 3 ))
+
+        # Connect to Core group=a (all 3 cores in that group)
+        for idx in $(seq 0 2); do
+            local core_id=$((1 + a * 3 + idx))
+            neighbors="$neighbors $core_id"
+        done
+
+        # Connect to all ToRs in the same pod
+        for e in $(seq 0 2); do
+            local tor_id=$((28 + pod * 3 + e))
+            neighbors="$neighbors $tor_id"
+        done
+
+    else
+        # ToR router: R28..R45
+        # tor_id = 28 + pod*3 + e => pod = (router_id - 28) / 3
+        local pod=$(( (router_id - 28) / 3 ))
+
+        # Connect to all Aggs in the same pod
+        for a in $(seq 0 2); do
+            local agg_id=$((10 + pod * 3 + a))
+            neighbors="$neighbors $agg_id"
+        done
+    fi
+
+    echo $neighbors
+}
+
+# 辅助函数：判断是否是 ToR（只有 ToR 起源前缀）
+is_tor_router() {
+    local router_id=$1
+    [ $router_id -ge 28 ] && [ $router_id -le 45 ]
+}
+
 for i in $(seq 1 $NUM_ROUTERS); do
     ROUTER_IP="10.0.$i.$i"
     ROUTER_ID="$ROUTER_IP"
     AS_NUMBER=$((65000 + i))
     
+    # 生成基础配置
     cat > /tmp/bird_r${i}.conf << EOF
 log stderr all;
 debug protocols { states, routes, filters, interfaces, events };
@@ -145,16 +224,30 @@ protocol kernel {
     merge paths on;
 }
 
+EOF
+
+    # 只有 ToR 路由器起源前缀（fat-tree-k6 模式）或所有路由器起源前缀（其他模式）
+    if [ "$TOPOLOGY_MODE" = "fat-tree-k6" ]; then
+        if is_tor_router $i; then
+            cat >> /tmp/bird_r${i}.conf << EOF
 protocol static static4 {
     ipv4;
     route 192.168.$i.0/24 blackhole;
 }
 
 EOF
+        fi
+    else
+        cat >> /tmp/bird_r${i}.conf << EOF
+protocol static static4 {
+    ipv4;
+    route 192.168.$i.0/24 blackhole;
+}
 
-    # 添加BGP配置 - 与所有其他路由器建立会话（full mesh）
-    # 实际上，这里改为环形拓扑：每个路由器只与前后两个邻居建立 BGP 会话
+EOF
+    fi
 
+    # 计算邻居列表
     if [ "$TOPOLOGY_MODE" = "ring" ]; then
         # 计算环形拓扑中的前后邻居编号
         LEFT=$((i - 1))
@@ -172,7 +265,10 @@ EOF
         else
             NEIGHBORS="$LEFT $RIGHT"
         fi
+    elif [ "$TOPOLOGY_MODE" = "fat-tree-k6" ]; then
+        NEIGHBORS=$(get_fat_tree_k6_neighbors $i)
     else
+        # full-mesh
         NEIGHBORS=$(seq 1 $NUM_ROUTERS)
     fi
 
@@ -201,7 +297,19 @@ EOF
         fi
     done
     
-    log_info "✓ R$i配置已创建 (AS$AS_NUMBER, $ROUTER_IP)"
+    # 根据路由器角色显示不同信息
+    if [ "$TOPOLOGY_MODE" = "fat-tree-k6" ]; then
+        if [ $i -le 9 ]; then
+            ROLE="Core"
+        elif [ $i -le 27 ]; then
+            ROLE="Agg"
+        else
+            ROLE="ToR"
+        fi
+        log_info "✓ R$i配置已创建 (AS$AS_NUMBER, $ROUTER_IP, $ROLE)"
+    else
+        log_info "✓ R$i配置已创建 (AS$AS_NUMBER, $ROUTER_IP)"
+    fi
 done
 
 log_step "步骤3: 创建Docker网络"
