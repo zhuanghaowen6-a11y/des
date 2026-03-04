@@ -18,6 +18,72 @@ import sys
 import os
 import re
 from collections import defaultdict
+from datetime import datetime
+
+# 时间模式：从环境变量读取
+# TIME_MODE=vt (默认): 使用 [VT=x.xxx] 标签
+# TIME_MODE=wallclock: 使用 docker logs -t 的 RFC3339 时间戳
+TIME_MODE = os.environ.get('TIME_MODE', 'vt').lower()
+T0_FILE = os.environ.get('T0_FILE', '')  # wall-clock 模式下的 t0 文件路径
+T0_EPOCH = 0.0  # 全局 t0（epoch 秒）
+
+def parse_rfc3339_timestamp(ts_str):
+    """
+    解析 RFC3339 时间戳（docker logs -t 格式）为 epoch 秒。
+    格式: 2024-01-15T10:30:45.123456789Z
+    """
+    try:
+        # 处理纳秒精度（Python datetime 只支持微秒）
+        # 截断或补齐到 6 位小数
+        if '.' in ts_str:
+            base, frac = ts_str.rstrip('Z').split('.')
+            frac = frac[:6].ljust(6, '0')  # 截断到 6 位
+            ts_str = f"{base}.{frac}"
+        else:
+            ts_str = ts_str.rstrip('Z')
+        
+        dt = datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S.%f')
+        return dt.timestamp()
+    except ValueError:
+        # 尝试无小数秒的格式
+        try:
+            dt = datetime.strptime(ts_str.rstrip('Z'), '%Y-%m-%dT%H:%M:%S')
+            return dt.timestamp()
+        except ValueError:
+            return None
+
+def extract_timestamp(line):
+    """
+    从日志行提取时间戳。
+    返回: (timestamp_value, is_relative)
+      - VT 模式: 返回 (vt_float, True) - 已经是相对时间
+      - wallclock 模式: 返回 (epoch_float, False) - 需要减去 t0
+    """
+    if TIME_MODE == 'vt':
+        # VT 模式：查找 [VT=x.xxx] 标签
+        vt_match = re.search(r'\[VT=([\d.]+)\]', line)
+        if vt_match:
+            return float(vt_match.group(1)), True
+        return None, True
+    else:
+        # wallclock 模式：行首的 RFC3339 时间戳
+        # docker logs -t 格式: "2024-01-15T10:30:45.123456789Z <log content>"
+        ts_match = re.match(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\s', line)
+        if ts_match:
+            epoch = parse_rfc3339_timestamp(ts_match.group(1))
+            if epoch is not None:
+                return epoch, False
+        return None, False
+
+def load_t0():
+    """加载 t0（仅 wallclock 模式需要）。"""
+    global T0_EPOCH
+    if TIME_MODE == 'wallclock' and T0_FILE and os.path.exists(T0_FILE):
+        with open(T0_FILE, 'r') as f:
+            T0_EPOCH = float(f.read().strip())
+        print_info(f"已加载 t0 = {T0_EPOCH:.6f} (from {T0_FILE})")
+    elif TIME_MODE == 'wallclock':
+        print_warn(f"wallclock 模式但未指定 T0_FILE 或文件不存在，使用 t0=0")
 
 # 颜色输出
 class Colors:
@@ -84,13 +150,14 @@ FLAP_THRESHOLD = 3
 def analyze_route_convergence(log_path, router_id, stability_window=0.0):
     """
     分析单个 BIRD 日志，提取路由收敛相关信息。
+    支持 VT 模式和 wallclock 模式。
     
     返回:
         {
-            'last_best_change_vt': float,  # 最后一次 [best] 路由变更的 VT
-            'last_update_vt': float,        # 最后一次路由更新事件的 VT
-            'best_changes': list,           # [(vt, prefix, action)] 所有 best 路由变更
-            'route_updates': list,          # [(vt, prefix, action)] 所有路由更新
+            'last_best_change_vt': float,  # 最后一次 [best] 路由变更的时间（相对 t0）
+            'last_update_vt': float,        # 最后一次路由更新事件的时间（相对 t0）
+            'best_changes': list,           # [(time, prefix, action)] 所有 best 路由变更
+            'route_updates': list,          # [(time, prefix, action)] 所有路由更新
         }
     """
     result = {
@@ -110,11 +177,15 @@ def analyze_route_convergence(log_path, router_id, stability_window=0.0):
     tor_prefix_pattern = re.compile(r'192\.168\.(2[89]|3[0-9]|4[0-5])\.0/24')
     
     for line in lines:
-        # 提取 VT
-        vt_match = re.search(r'\[VT=([\d.]+)\]', line)
-        if not vt_match:
+        # 提取时间戳（VT 或 wallclock）
+        ts, is_relative = extract_timestamp(line)
+        if ts is None:
             continue
-        vt = float(vt_match.group(1))
+        # 转换为相对时间
+        if is_relative:
+            t = ts
+        else:
+            t = ts - T0_EPOCH
         
         # 匹配 [best] 路由变更: "r*.ipv4 > added [best]" 或 "r*.ipv4 > replaced [best]"
         # 格式: <TRACE> rX.ipv4 > added [best] 192.168.Y.0/24 ...
@@ -125,9 +196,9 @@ def analyze_route_convergence(log_path, router_id, stability_window=0.0):
             prefix = best_match.group(3)
             # 只关注 ToR 前缀
             if tor_prefix_pattern.match(prefix):
-                result['best_changes'].append((vt, prefix, action))
-                if vt > result['last_best_change_vt']:
-                    result['last_best_change_vt'] = vt
+                result['best_changes'].append((t, prefix, action))
+                if t > result['last_best_change_vt']:
+                    result['last_best_change_vt'] = t
         
         # 匹配所有路由更新事件 (包括 added, replaced, removed, withdraw 等)
         # 格式: <TRACE> rX.ipv4 > ... 或 <TRACE> rX.ipv4 < ...
@@ -139,9 +210,9 @@ def analyze_route_convergence(log_path, router_id, stability_window=0.0):
                 prefix = prefix_match.group(1)
                 if tor_prefix_pattern.match(prefix):
                     action = update_match.group(2)
-                    result['route_updates'].append((vt, prefix, action))
-                    if vt > result['last_update_vt']:
-                        result['last_update_vt'] = vt
+                    result['route_updates'].append((t, prefix, action))
+                    if t > result['last_update_vt']:
+                        result['last_update_vt'] = t
     
     return result
 
@@ -210,12 +281,15 @@ def analyze_bird_log(log_path, router_id, expected_peers):
     # 跟踪每个 peer 的状态变化
     peer_states = defaultdict(list)  # peer -> [(line_num, state)]
     
-    # Helper: 从行中提取 VT 标签 [VT=x.xxx]
-    def extract_vt(line):
-        vt_match = re.search(r'\[VT=([\d.]+)\]', line)
-        if vt_match:
-            return float(vt_match.group(1))
-        return None
+    # Helper: 从行中提取时间戳（支持 VT 和 wallclock 模式）
+    def extract_time(line):
+        ts, is_relative = extract_timestamp(line)
+        if ts is None:
+            return None
+        if is_relative:
+            return ts
+        else:
+            return ts - T0_EPOCH
     
     # ========== 第一段：收集状态时间线 ==========
     for i, line in enumerate(lines[:analyze_until]):
@@ -224,12 +298,12 @@ def analyze_bird_log(log_path, router_id, expected_peers):
         if match:
             peer = match.group(1)
             peer_states[peer].append((i, 'established'))
-            # 提取 VT 用于收敛时间计算
-            vt = extract_vt(line)
-            if vt is not None:
-                result['session_vt'][peer] = vt
-                if vt > result['max_session_vt']:
-                    result['max_session_vt'] = vt
+            # 提取时间戳用于收敛时间计算
+            t = extract_time(line)
+            if t is not None:
+                result['session_vt'][peer] = t
+                if t > result['max_session_vt']:
+                    result['max_session_vt'] = t
             continue
         
         # State changed to up
@@ -414,24 +488,33 @@ def build_expected_peers(num_routers, topology_mode):
 def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
     """
     分析所有日志，综合判断测试结果。
+    支持 VT 模式（DES 仿真）和 wallclock 模式（容器-only）。
     """
-    print_header("BGP 日志分析报告")
+    # 加载 t0（wallclock 模式需要）
+    load_t0()
+    
+    time_mode_label = "VT" if TIME_MODE == 'vt' else "wall-clock"
+    print_header(f"BGP 日志分析报告 (时间模式: {time_mode_label})")
     
     all_pass = True
     issues = []
     
-    # 1. 分析 DESD 日志
-    print_header("1. DESD 状态检查")
-    desd_log = os.path.join(log_dir, f"desd_n{num_routers}.log")
-    desd_ok, desd_reason, final_vt, event_count = analyze_desd_log(desd_log)
-    
-    if desd_ok:
-        print_ok(desd_reason)
-        print_info(f"最终虚拟时间: {final_vt}s, 处理事件数: {event_count}")
+    # 1. 分析 DESD 日志（仅 VT 模式）
+    if TIME_MODE == 'vt':
+        print_header("1. DESD 状态检查")
+        desd_log = os.path.join(log_dir, f"desd_n{num_routers}.log")
+        desd_ok, desd_reason, final_vt, event_count = analyze_desd_log(desd_log)
+        
+        if desd_ok:
+            print_ok(desd_reason)
+            print_info(f"最终虚拟时间: {final_vt}s, 处理事件数: {event_count}")
+        else:
+            print_fail(desd_reason)
+            all_pass = False
+            issues.append(f"DESD: {desd_reason}")
     else:
-        print_fail(desd_reason)
-        all_pass = False
-        issues.append(f"DESD: {desd_reason}")
+        print_header("1. 容器-only 模式 (无 DESD)")
+        print_info("跳过 DESD 日志检查（wallclock 模式）")
     
     # 2. 分析 BIRD 日志
     print_header("2. BGP 会话状态检查")
@@ -572,23 +655,30 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
         total_best_changes += len(route_result['best_changes'])
         total_route_updates += len(route_result['route_updates'])
     
-    print(f"\n{Colors.BOLD}收敛时间 (基于 VT 标签):{Colors.END}")
+    # 时间单位标签
+    time_unit = "VT" if TIME_MODE == 'vt' else "s"
+    time_source = "基于 VT 标签" if TIME_MODE == 'vt' else "基于 wall-clock"
+    
+    print(f"\n{Colors.BOLD}收敛时间 ({time_source}):{Colors.END}")
     if global_max_session_vt > 0:
-        print(f"  T_session (最后一个会话建立): {Colors.GREEN}{global_max_session_vt:.3f}s VT{Colors.END}")
-        print(f"  带 VT 标签的会话数: {sessions_with_vt}/{total_established}")
+        print(f"  T_session (最后一个会话建立): {Colors.GREEN}{global_max_session_vt:.3f}s {time_unit}{Colors.END}")
+        print(f"  带时间戳的会话数: {sessions_with_vt}/{total_established}")
     else:
-        print(f"  {Colors.YELLOW}未检测到 VT 标签 (确保 DES_LOG_VT_PREFIX=1){Colors.END}")
+        if TIME_MODE == 'vt':
+            print(f"  {Colors.YELLOW}未检测到 VT 标签 (确保 DES_LOG_VT_PREFIX=1){Colors.END}")
+        else:
+            print(f"  {Colors.YELLOW}未检测到时间戳 (确保使用 docker logs -t){Colors.END}")
     
     # 输出路由收敛时间
-    print(f"\n{Colors.BOLD}路由收敛时间 (基于 VT 标签):{Colors.END}")
+    print(f"\n{Colors.BOLD}路由收敛时间 ({time_source}):{Colors.END}")
     if global_max_best_change_vt > 0:
-        print(f"  T_route_rib (最后一次 best 路由变更): {Colors.GREEN}{global_max_best_change_vt:.3f}s VT{Colors.END}")
+        print(f"  T_route_rib (最后一次 best 路由变更): {Colors.GREEN}{global_max_best_change_vt:.3f}s {time_unit}{Colors.END}")
         print(f"  检测到的 [best] 路由变更数: {total_best_changes}")
     else:
         print(f"  {Colors.YELLOW}T_route_rib: 未检测到 ToR 前缀的 [best] 路由变更{Colors.END}")
     
     if global_max_update_vt > 0:
-        print(f"  T_update_quiescence (最后一次路由更新): {Colors.GREEN}{global_max_update_vt:.3f}s VT{Colors.END}")
+        print(f"  T_update_quiescence (最后一次路由更新): {Colors.GREEN}{global_max_update_vt:.3f}s {time_unit}{Colors.END}")
         print(f"  检测到的路由更新事件数: {total_route_updates}")
     else:
         print(f"  {Colors.YELLOW}T_update_quiescence: 未检测到 ToR 前缀的路由更新{Colors.END}")
@@ -601,9 +691,10 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
         for warn in flapping_warnings:
             print(f"{Colors.YELLOW}  - {warn}{Colors.END}")
     
+    run_mode = "DESD 仿真" if TIME_MODE == 'vt' else "容器-only"
     if all_pass:
         print(f"\n{Colors.GREEN}{Colors.BOLD}{'='*60}{Colors.END}")
-        print(f"{Colors.GREEN}{Colors.BOLD} ✓ PASS: 所有 BGP 会话在 DESD 运行期间保持健康{Colors.END}")
+        print(f"{Colors.GREEN}{Colors.BOLD} ✓ PASS: 所有 BGP 会话在{run_mode}期间保持健康{Colors.END}")
         print(f"{Colors.GREEN}{Colors.BOLD}{'='*60}{Colors.END}\n")
         return 0
     else:
