@@ -107,7 +107,9 @@ def analyze_bird_log(log_path, router_id, expected_peers):
             'never_established': set(),  # 从未建立的会话
             'flapping': dict(),    # 抖动严重的会话 {peer: close_count}
             'desd_disconnect_line': int or None,  # DESD 断开的行号
-            'errors': []           # 其他错误信息
+            'errors': [],          # 其他错误信息
+            'session_vt': dict(),  # 会话建立时的VT {peer: vt}
+            'max_session_vt': float  # 最大会话建立VT (T_session)
         }
     """
     result = {
@@ -116,7 +118,9 @@ def analyze_bird_log(log_path, router_id, expected_peers):
         'never_established': set(expected_peers),
         'flapping': {},  # {peer: close_count}
         'desd_disconnect_line': None,
-        'errors': []
+        'errors': [],
+        'session_vt': {},  # 会话建立时的VT
+        'max_session_vt': 0.0
     }
     
     if not os.path.exists(log_path):
@@ -141,6 +145,13 @@ def analyze_bird_log(log_path, router_id, expected_peers):
     # 跟踪每个 peer 的状态变化
     peer_states = defaultdict(list)  # peer -> [(line_num, state)]
     
+    # Helper: 从行中提取 VT 标签 [VT=x.xxx]
+    def extract_vt(line):
+        vt_match = re.search(r'\[VT=([\d.]+)\]', line)
+        if vt_match:
+            return float(vt_match.group(1))
+        return None
+    
     # ========== 第一段：收集状态时间线 ==========
     for i, line in enumerate(lines[:analyze_until]):
         # BGP session established
@@ -148,6 +159,12 @@ def analyze_bird_log(log_path, router_id, expected_peers):
         if match:
             peer = match.group(1)
             peer_states[peer].append((i, 'established'))
+            # 提取 VT 用于收敛时间计算
+            vt = extract_vt(line)
+            if vt is not None:
+                result['session_vt'][peer] = vt
+                if vt > result['max_session_vt']:
+                    result['max_session_vt'] = vt
             continue
         
         # State changed to up
@@ -459,6 +476,22 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
     print(f"  从未建立数: {total_never_established}")
     print(f"  异常断开数: {total_closed} (最终状态为 down)")
     print(f"  抖动会话数: {total_flapping} (>= {FLAP_THRESHOLD} 次 close/down)")
+    
+    # 计算并报告收敛时间 T_session
+    global_max_session_vt = 0.0
+    sessions_with_vt = 0
+    for router_id, result in router_results.items():
+        if result['max_session_vt'] > 0:
+            sessions_with_vt += len(result['session_vt'])
+            if result['max_session_vt'] > global_max_session_vt:
+                global_max_session_vt = result['max_session_vt']
+    
+    print(f"\n{Colors.BOLD}收敛时间 (基于 VT 标签):{Colors.END}")
+    if global_max_session_vt > 0:
+        print(f"  T_session (最后一个会话建立): {Colors.GREEN}{global_max_session_vt:.3f}s VT{Colors.END}")
+        print(f"  带 VT 标签的会话数: {sessions_with_vt}/{total_established}")
+    else:
+        print(f"  {Colors.YELLOW}未检测到 VT 标签 (确保 DES_LOG_VT_PREFIX=1){Colors.END}")
     
     print(f"\n{Colors.BOLD}最终判定:{Colors.END}")
     

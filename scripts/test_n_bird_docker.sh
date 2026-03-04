@@ -422,7 +422,7 @@ if [ "$ENABLE_STRACE" -eq 1 ]; then
             ulimit -c unlimited
             strace -f -o /tmp/bird_r'"$i"'_strace.log \
                 -e trace=close,exit,exit_group,signal,poll,select,recvfrom,read,write,socket,connect,accept,bind,listen \
-                env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID='"$i"' \
+                env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID='"$i"' DES_LOG_VT_PREFIX=1 \
                 bird -f -c /etc/bird/bird.conf > /var/log/bird_r'"$i"'.log 2>&1
         ' &
     done
@@ -431,7 +431,7 @@ else
     for i in $(seq 1 $NUM_ROUTERS); do
         sudo docker exec -d r$i bash -c '
             ulimit -c unlimited
-            env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID='"$i"' \
+            env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID='"$i"' DES_LOG_VT_PREFIX=1 \
                 bird -f -c /etc/bird/bird.conf > /var/log/bird_r'"$i"'.log 2>&1
         ' &
     done

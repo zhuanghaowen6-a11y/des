@@ -30,6 +30,11 @@ int my_router_id = -1;
 static unsigned long long total_clock_calls = 0;
 static double last_reported_vtime = -1.0;
 
+// VT tagging for BIRD logs (enabled by DES_LOG_VT_PREFIX=1)
+static int vt_prefix_enabled = -1;  // -1: uninitialized, 0: disabled, 1: enabled
+static __thread double cached_vt = 0.0;  // Thread-local cached VT for log prefixing
+static __thread int in_write_hook = 0;   // Prevent recursion in write hook
+
 // --- Per-Thread State ---
 // 每个线程有自己的与 DESD 的通信通道
 // 接收缓冲区大小（足够容纳多条消息）
@@ -88,7 +93,7 @@ static __thread int in_mutex_hook = 0;  // 防止递归 hook
 void generate_request_id(char* id_buf); // Function prototype for generate_request_id
 
 // Forward declaration for read_one_desd_response (used by ensure_thread_registered)
-static int read_one_desd_response(ThreadState *state, Message *msg);
+int read_one_desd_response(ThreadState *state, Message *msg);
 
 // Function prototypes for intercepted functions
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
@@ -457,7 +462,7 @@ static void lib_init(void) {
 static unsigned long next_request_id_val = 1;
 
 void generate_request_id(char* id_buf) {
-    // 🔒 线程安全：保护request_counter的原子递增
+    // 线程安全：保护request_counter的原子递增
     pthread_mutex_lock(&request_counter_mutex);
     unsigned long current_id = next_request_id_val++;
     pthread_mutex_unlock(&request_counter_mutex);
@@ -525,7 +530,7 @@ static int send_msg_to_desd(const Message* req_msg) {
 //   0  - 没有完整消息可读（非阻塞情况下，或只有半包）
 //   -1 - 错误或连接断开
 // ============================================================================
-static int read_one_desd_response(ThreadState *state, Message *msg) {
+int read_one_desd_response(ThreadState *state, Message *msg) {
     if (!state || state->desd_socket_fd < 0) {
         return -1;
     }
@@ -2789,10 +2794,33 @@ ssize_t read(int fd, void *buf, size_t count) {
     return real_read(fd, buf, count);
 }
 
+// Helper: check if VT prefixing is enabled (lazy init from env)
+static int is_vt_prefix_enabled(void) {
+    if (vt_prefix_enabled < 0) {
+        const char *env = getenv("DES_LOG_VT_PREFIX");
+        vt_prefix_enabled = (env && strcmp(env, "1") == 0) ? 1 : 0;
+    }
+    return vt_prefix_enabled;
+}
+
 // write - 拦截并转发socket写入到send()
 ssize_t write(int fd, const void *buf, size_t count) {
-    // 标准输出/错误：不拦截，避免fprintf/printf触发write钩子导致ensure_thread_registered递归调用
+    // 标准输出/错误：可选VT前缀
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
+        // Avoid recursion and check if VT prefixing is enabled
+        if (!in_write_hook && is_vt_prefix_enabled() && count > 0 && cached_vt > 0) {
+            in_write_hook = 1;
+            const char *data = (const char *)buf;
+            // Check if this looks like a BIRD log line (starts with "bird:")
+            if (count >= 5 && strncmp(data, "bird:", 5) == 0) {
+                // Prefix with VT tag: [VT=xxx.xxx]
+                char vt_prefix[32];
+                int prefix_len = snprintf(vt_prefix, sizeof(vt_prefix), "[VT=%.3f] ", cached_vt);
+                // Write prefix first, then original data
+                real_write(fd, vt_prefix, prefix_len);
+            }
+            in_write_hook = 0;
+        }
         return real_write(fd, buf, count);
     }
 
@@ -2894,6 +2922,9 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
         
         double vtime_sec = json_number_value(vtime_json);
         json_decref(resp_payload_obj);
+        
+        // Cache VT for log prefixing
+        cached_vt = vtime_sec;
         
         total_clock_calls++;
         
