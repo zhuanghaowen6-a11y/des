@@ -8,6 +8,7 @@
 #include <dlfcn.h>      // For dlsym
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/uio.h> // For writev(), struct iovec
 #include <netinet/in.h> // For sockaddr_in
 #include <arpa/inet.h>  // For inet_ntop
 #include <errno.h>
@@ -79,6 +80,7 @@ static int (*real_poll)(struct pollfd *, nfds_t, int) = NULL;
 static unsigned int (*real_sleep)(unsigned int) = NULL;
 static ssize_t (*real_read)(int, void *, size_t) = NULL;
 static ssize_t (*real_write)(int, const void *, size_t) = NULL;
+static ssize_t (*real_writev)(int, const struct iovec *, int) = NULL;
 static int (*real_fcntl)(int, int, ...) = NULL;
 static int (*real_clock_gettime)(clockid_t, struct timespec *) = NULL;
 
@@ -105,6 +107,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout);
 unsigned int sleep(unsigned int seconds);
 ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
 int fcntl(int fd, int cmd, ...);
 
 // Helper function to send message to desd and wait for response
@@ -424,6 +427,7 @@ static void lib_init(void) {
     real_sleep = dlsym(RTLD_NEXT, "sleep");
     real_read = dlsym(RTLD_NEXT, "read");
     real_write = dlsym(RTLD_NEXT, "write");
+    real_writev = dlsym(RTLD_NEXT, "writev");
     real_fcntl = dlsym(RTLD_NEXT, "fcntl");
     real_clock_gettime = dlsym(RTLD_NEXT, "clock_gettime");
     
@@ -434,7 +438,7 @@ static void lib_init(void) {
 
     if (!real_socket || !real_connect || !real_send || !real_recv || !real_close ||
         !real_bind || !real_listen || !real_accept || !real_unlink || !real_select || 
-        !real_poll || !real_sleep || !real_read || !real_write || !real_fcntl ||
+        !real_poll || !real_sleep || !real_read || !real_write || !real_writev || !real_fcntl ||
         !real_clock_gettime || !real_pthread_mutex_lock || !real_pthread_mutex_trylock ||
         !real_pthread_mutex_unlock) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Error in dlsym: %s\n", dlerror());
@@ -2803,19 +2807,45 @@ static int is_vt_prefix_enabled(void) {
     return vt_prefix_enabled;
 }
 
+static int iov_starts_with_bird(const struct iovec *iov, int iovcnt) {
+    static const char prefix[] = "bird:";
+    size_t need = sizeof(prefix) - 1;
+    size_t got = 0;
+
+    if (!iov || iovcnt <= 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < iovcnt && got < need; i++) {
+        const char *p = (const char *)iov[i].iov_base;
+        size_t n = iov[i].iov_len;
+        while (n > 0 && got < need) {
+            if (*p != prefix[got]) {
+                return 0;
+            }
+            p++;
+            n--;
+            got++;
+        }
+    }
+
+    return (got == need) ? 1 : 0;
+}
+
 // write - 拦截并转发socket写入到send()
 ssize_t write(int fd, const void *buf, size_t count) {
     // 标准输出/错误：可选VT前缀
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
         // Avoid recursion and check if VT prefixing is enabled
-        if (!in_write_hook && is_vt_prefix_enabled() && count > 0 && cached_vt > 0) {
+        if (!in_write_hook && is_vt_prefix_enabled() && count > 0) {
             in_write_hook = 1;
             const char *data = (const char *)buf;
             // Check if this looks like a BIRD log line (starts with "bird:")
             if (count >= 5 && strncmp(data, "bird:", 5) == 0) {
+                double vt = (cached_vt > 0.0) ? cached_vt : current_virtual_time;
                 // Prefix with VT tag: [VT=xxx.xxx]
                 char vt_prefix[32];
-                int prefix_len = snprintf(vt_prefix, sizeof(vt_prefix), "[VT=%.3f] ", cached_vt);
+                int prefix_len = snprintf(vt_prefix, sizeof(vt_prefix), "[VT=%.3f] ", vt);
                 // Write prefix first, then original data
                 real_write(fd, vt_prefix, prefix_len);
             }
@@ -2846,6 +2876,73 @@ ssize_t write(int fd, const void *buf, size_t count) {
     
     // 4. 普通文件或其他FD：不拦截
     return real_write(fd, buf, count);
+}
+
+// writev - 拦截并转发socket写入到send()，并可选为BIRD日志打VT前缀
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
+    // 标准输出/错误：可选VT前缀
+    if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
+        if (!in_write_hook && is_vt_prefix_enabled() && iovcnt > 0) {
+            in_write_hook = 1;
+
+            if (iov_starts_with_bird(iov, iovcnt)) {
+                double vt = (cached_vt > 0.0) ? cached_vt : current_virtual_time;
+                char vt_prefix[32];
+                int prefix_len = snprintf(vt_prefix, sizeof(vt_prefix), "[VT=%.3f] ", vt);
+                real_write(fd, vt_prefix, prefix_len);
+            }
+
+            in_write_hook = 0;
+        }
+        return real_writev(fd, iov, iovcnt);
+    }
+
+    // 1. 获取当前线程的 DESD socket
+    int thread_socket = get_thread_desd_socket();
+
+    // 2. desd控制socket：不拦截
+    if (fd == thread_socket) {
+        return real_writev(fd, iov, iovcnt);
+    }
+
+    // 3. 未初始化DES：不拦截
+    if (thread_socket < 0) {
+        return real_writev(fd, iov, iovcnt);
+    }
+
+    // 4. 检查是否是DES管理的socket
+    if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
+        // 这是DES管理的socket，将iovec拼接后转发到send()
+        size_t total = 0;
+        for (int i = 0; i < iovcnt; i++) {
+            total += iov[i].iov_len;
+        }
+
+        if (total == 0) {
+            return 0;
+        }
+
+        char *tmp = (char *)malloc(total);
+        if (!tmp) {
+            // 内存不足：降级为真实 writev
+            return real_writev(fd, iov, iovcnt);
+        }
+
+        size_t off = 0;
+        for (int i = 0; i < iovcnt; i++) {
+            if (iov[i].iov_len > 0) {
+                memcpy(tmp + off, iov[i].iov_base, iov[i].iov_len);
+                off += iov[i].iov_len;
+            }
+        }
+
+        ssize_t ret = send(fd, tmp, total, 0);
+        free(tmp);
+        return ret;
+    }
+
+    // 5. 普通文件或其他FD：不拦截
+    return real_writev(fd, iov, iovcnt);
 }
 
 // clock_gettime - 拦截并向desd查询虚拟时间
@@ -2925,6 +3022,7 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
         
         // Cache VT for log prefixing
         cached_vt = vtime_sec;
+        current_virtual_time = vtime_sec;
         
         total_clock_calls++;
         
