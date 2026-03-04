@@ -18,7 +18,7 @@ import sys
 import os
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 # 时间模式：从环境变量读取
 # TIME_MODE=vt (默认): 使用 [VT=x.xxx] 标签
@@ -32,25 +32,35 @@ def parse_rfc3339_timestamp(ts_str):
     解析 RFC3339 时间戳（docker logs -t 格式）为 epoch 秒。
     格式: 2024-01-15T10:30:45.123456789Z
     """
+    # docker logs -t 通常输出 UTC（Z），也可能输出带 offset 的 RFC3339。
+    # 必须按 UTC/offset 解析为 timezone-aware datetime，否则会被当成本地时区，导致 epoch 偏移。
     try:
-        # 处理纳秒精度（Python datetime 只支持微秒）
-        # 截断或补齐到 6 位小数
-        if '.' in ts_str:
-            base, frac = ts_str.rstrip('Z').split('.')
-            frac = frac[:6].ljust(6, '0')  # 截断到 6 位
-            ts_str = f"{base}.{frac}"
-        else:
-            ts_str = ts_str.rstrip('Z')
-        
-        dt = datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S.%f')
+        s = ts_str.strip()
+
+        # 将 Z 规范化为 +00:00 以兼容 fromisoformat
+        if s.endswith('Z'):
+            s = s[:-1] + '+00:00'
+
+        # 截断纳秒到微秒（fromisoformat 仅支持 6 位小数）
+        # 形如: 2026-03-04T11:49:45.858143907+00:00
+        m = re.match(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?([+-]\d{2}:\d{2})$', s)
+        if m:
+            base = m.group(1)
+            frac = m.group(2) or ''
+            offset = m.group(3)
+            if frac:
+                frac = frac[:6].ljust(6, '0')
+                s = f"{base}.{frac}{offset}"
+            else:
+                s = f"{base}{offset}"
+
+        dt = datetime.fromisoformat(s)
+        # 理论上 fromisoformat 解析带 offset 会返回 aware datetime；这里再防御一次
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         return dt.timestamp()
-    except ValueError:
-        # 尝试无小数秒的格式
-        try:
-            dt = datetime.strptime(ts_str.rstrip('Z'), '%Y-%m-%dT%H:%M:%S')
-            return dt.timestamp()
-        except ValueError:
-            return None
+    except Exception:
+        return None
 
 def extract_timestamp(line):
     """
@@ -656,12 +666,12 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
         total_route_updates += len(route_result['route_updates'])
     
     # 时间单位标签
-    time_unit = "VT" if TIME_MODE == 'vt' else "s"
+    time_suffix = "s VT" if TIME_MODE == 'vt' else "s"
     time_source = "基于 VT 标签" if TIME_MODE == 'vt' else "基于 wall-clock"
     
     print(f"\n{Colors.BOLD}收敛时间 ({time_source}):{Colors.END}")
     if global_max_session_vt > 0:
-        print(f"  T_session (最后一个会话建立): {Colors.GREEN}{global_max_session_vt:.3f}s {time_unit}{Colors.END}")
+        print(f"  T_session (最后一个会话建立): {Colors.GREEN}{global_max_session_vt:.3f}{time_suffix}{Colors.END}")
         print(f"  带时间戳的会话数: {sessions_with_vt}/{total_established}")
     else:
         if TIME_MODE == 'vt':
@@ -672,13 +682,13 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
     # 输出路由收敛时间
     print(f"\n{Colors.BOLD}路由收敛时间 ({time_source}):{Colors.END}")
     if global_max_best_change_vt > 0:
-        print(f"  T_route_rib (最后一次 best 路由变更): {Colors.GREEN}{global_max_best_change_vt:.3f}s {time_unit}{Colors.END}")
+        print(f"  T_route_rib (最后一次 best 路由变更): {Colors.GREEN}{global_max_best_change_vt:.3f}{time_suffix}{Colors.END}")
         print(f"  检测到的 [best] 路由变更数: {total_best_changes}")
     else:
         print(f"  {Colors.YELLOW}T_route_rib: 未检测到 ToR 前缀的 [best] 路由变更{Colors.END}")
     
     if global_max_update_vt > 0:
-        print(f"  T_update_quiescence (最后一次路由更新): {Colors.GREEN}{global_max_update_vt:.3f}s {time_unit}{Colors.END}")
+        print(f"  T_update_quiescence (最后一次路由更新): {Colors.GREEN}{global_max_update_vt:.3f}{time_suffix}{Colors.END}")
         print(f"  检测到的路由更新事件数: {total_route_updates}")
     else:
         print(f"  {Colors.YELLOW}T_update_quiescence: 未检测到 ToR 前缀的路由更新{Colors.END}")
