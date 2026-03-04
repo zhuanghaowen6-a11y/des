@@ -81,6 +81,71 @@ def analyze_desd_log(log_path):
 # Flap 阈值：超过此次数的 close/down 视为抖动严重
 FLAP_THRESHOLD = 3
 
+def analyze_route_convergence(log_path, router_id, stability_window=0.0):
+    """
+    分析单个 BIRD 日志，提取路由收敛相关信息。
+    
+    返回:
+        {
+            'last_best_change_vt': float,  # 最后一次 [best] 路由变更的 VT
+            'last_update_vt': float,        # 最后一次路由更新事件的 VT
+            'best_changes': list,           # [(vt, prefix, action)] 所有 best 路由变更
+            'route_updates': list,          # [(vt, prefix, action)] 所有路由更新
+        }
+    """
+    result = {
+        'last_best_change_vt': 0.0,
+        'last_update_vt': 0.0,
+        'best_changes': [],
+        'route_updates': [],
+    }
+    
+    if not os.path.exists(log_path):
+        return result
+    
+    with open(log_path, 'r', errors='replace') as f:
+        lines = f.readlines()
+    
+    # ToR 前缀模式: 192.168.X.0/24 (X = 28..45)
+    tor_prefix_pattern = re.compile(r'192\.168\.(2[89]|3[0-9]|4[0-5])\.0/24')
+    
+    for line in lines:
+        # 提取 VT
+        vt_match = re.search(r'\[VT=([\d.]+)\]', line)
+        if not vt_match:
+            continue
+        vt = float(vt_match.group(1))
+        
+        # 匹配 [best] 路由变更: "r*.ipv4 > added [best]" 或 "r*.ipv4 > replaced [best]"
+        # 格式: <TRACE> rX.ipv4 > added [best] 192.168.Y.0/24 ...
+        best_match = re.search(r'<TRACE> (r\d+|static4)\.ipv4 > (added|replaced) \[best\] (\S+)', line)
+        if best_match:
+            protocol = best_match.group(1)
+            action = best_match.group(2)
+            prefix = best_match.group(3)
+            # 只关注 ToR 前缀
+            if tor_prefix_pattern.match(prefix):
+                result['best_changes'].append((vt, prefix, action))
+                if vt > result['last_best_change_vt']:
+                    result['last_best_change_vt'] = vt
+        
+        # 匹配所有路由更新事件 (包括 added, replaced, removed, withdraw 等)
+        # 格式: <TRACE> rX.ipv4 > ... 或 <TRACE> rX.ipv4 < ...
+        update_match = re.search(r'<TRACE> (r\d+|static4)\.ipv4 [><] (added|replaced|removed|idempotent withdraw)', line)
+        if update_match:
+            # 提取前缀
+            prefix_match = re.search(r'(\d+\.\d+\.\d+\.\d+/\d+)', line)
+            if prefix_match:
+                prefix = prefix_match.group(1)
+                if tor_prefix_pattern.match(prefix):
+                    action = update_match.group(2)
+                    result['route_updates'].append((vt, prefix, action))
+                    if vt > result['last_update_vt']:
+                        result['last_update_vt'] = vt
+    
+    return result
+
+
 def analyze_bird_log(log_path, router_id, expected_peers):
     """
     分析单个 BIRD 日志，检查 BGP 会话状态。
@@ -399,6 +464,9 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
     router_results = {}
     flapping_warnings = []  # 用于最终汇总
     
+    # 路由收敛统计
+    route_convergence_results = {}
+    
     for router_id in range(1, num_routers + 1):
         expected_peers = peers_per_router.get(router_id, [])
         
@@ -422,6 +490,10 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
         
         result = analyze_bird_log(log_path, router_id, expected_peers)
         router_results[router_id] = result
+        
+        # 分析路由收敛
+        route_result = analyze_route_convergence(log_path, router_id)
+        route_convergence_results[router_id] = route_result
         
         # 报告
         print(f"\n{Colors.BOLD}R{router_id} ({log_path}):{Colors.END}")
@@ -486,12 +558,40 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
             if result['max_session_vt'] > global_max_session_vt:
                 global_max_session_vt = result['max_session_vt']
     
+    # 计算 T_route_rib 和 T_update_quiescence
+    global_max_best_change_vt = 0.0
+    global_max_update_vt = 0.0
+    total_best_changes = 0
+    total_route_updates = 0
+    
+    for router_id, route_result in route_convergence_results.items():
+        if route_result['last_best_change_vt'] > global_max_best_change_vt:
+            global_max_best_change_vt = route_result['last_best_change_vt']
+        if route_result['last_update_vt'] > global_max_update_vt:
+            global_max_update_vt = route_result['last_update_vt']
+        total_best_changes += len(route_result['best_changes'])
+        total_route_updates += len(route_result['route_updates'])
+    
     print(f"\n{Colors.BOLD}收敛时间 (基于 VT 标签):{Colors.END}")
     if global_max_session_vt > 0:
         print(f"  T_session (最后一个会话建立): {Colors.GREEN}{global_max_session_vt:.3f}s VT{Colors.END}")
         print(f"  带 VT 标签的会话数: {sessions_with_vt}/{total_established}")
     else:
         print(f"  {Colors.YELLOW}未检测到 VT 标签 (确保 DES_LOG_VT_PREFIX=1){Colors.END}")
+    
+    # 输出路由收敛时间
+    print(f"\n{Colors.BOLD}路由收敛时间 (基于 VT 标签):{Colors.END}")
+    if global_max_best_change_vt > 0:
+        print(f"  T_route_rib (最后一次 best 路由变更): {Colors.GREEN}{global_max_best_change_vt:.3f}s VT{Colors.END}")
+        print(f"  检测到的 [best] 路由变更数: {total_best_changes}")
+    else:
+        print(f"  {Colors.YELLOW}T_route_rib: 未检测到 ToR 前缀的 [best] 路由变更{Colors.END}")
+    
+    if global_max_update_vt > 0:
+        print(f"  T_update_quiescence (最后一次路由更新): {Colors.GREEN}{global_max_update_vt:.3f}s VT{Colors.END}")
+        print(f"  检测到的路由更新事件数: {total_route_updates}")
+    else:
+        print(f"  {Colors.YELLOW}T_update_quiescence: 未检测到 ToR 前缀的路由更新{Colors.END}")
     
     print(f"\n{Colors.BOLD}最终判定:{Colors.END}")
     
