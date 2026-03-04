@@ -1,5 +1,31 @@
 #define _GNU_SOURCE // Required for RTLD_NEXT and dlsym
 
+// 日志开关：设为 1 开启详细调试日志，设为 0 精简日志（仅保留错误和关键状态）
+#define LIBDESHOOK_VERBOSE 0
+
+// 条件日志宏：VERBOSE=0 时这些日志不会输出
+#if LIBDESHOOK_VERBOSE
+#define LOG_TRACE(...) fprintf(stderr, __VA_ARGS__)
+#define LOG_DEBUG(...) fprintf(stderr, __VA_ARGS__)
+#define LOG_RPC(...) fprintf(stderr, __VA_ARGS__)
+#define LOG_MUTEX(...) printf(__VA_ARGS__)
+#define LOG_POLL(...) printf(__VA_ARGS__)
+#define LOG_REQ(...) printf(__VA_ARGS__)
+#define LOG_RESP(...) printf(__VA_ARGS__)
+#define LOG_HOOK(...) fprintf(stderr, __VA_ARGS__)
+#define LOG_INFO(...) printf(__VA_ARGS__)
+#else
+#define LOG_TRACE(...) ((void)0)
+#define LOG_DEBUG(...) ((void)0)
+#define LOG_RPC(...) ((void)0)
+#define LOG_MUTEX(...) ((void)0)
+#define LOG_POLL(...) ((void)0)
+#define LOG_REQ(...) ((void)0)
+#define LOG_RESP(...) ((void)0)
+#define LOG_HOOK(...) ((void)0)
+#define LOG_INFO(...) ((void)0)
+#endif
+
 #include "common.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,13 +146,11 @@ static void thread_state_destructor(void *ptr) {
     ThreadState *state = (ThreadState *)ptr;
     if (state) {
         if (state->desd_socket_fd >= 0) {
-            fprintf(stderr,
-                    "[LIBDESHOOK DEBUG] R%d T%d thread_state_destructor: closing DESD control socket fd=%d on thread exit at VT=%.6f.\n",
+            LOG_DEBUG("[LIBDESHOOK DEBUG] R%d T%d thread_state_destructor: closing DESD control socket fd=%d on thread exit at VT=%.6f.\n",
                     my_router_id,
                     state->thread_id,
                     state->desd_socket_fd,
                     current_virtual_time);
-            fflush(stderr);
             real_close(state->desd_socket_fd);
         }
         free(state);
@@ -180,12 +204,12 @@ static int ensure_thread_registered(void) {
         return 0;
     }
     
-    fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: entered, is_registered=%d, current_fd=%d\n",
+    LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: entered, is_registered=%d, current_fd=%d\n",
             my_router_id, state->thread_id, state->is_registered, state->desd_socket_fd);
     fflush(stderr);
     
     if (state->is_registered) {
-        fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: already registered, returning existing state\n",
+        LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: already registered, returning existing state\n",
                 my_router_id, state->thread_id);
         fflush(stderr);
         return 1;  // Already registered
@@ -194,7 +218,7 @@ static int ensure_thread_registered(void) {
     state->registration_in_progress = 1;
     
     // Create socket and connect to DESD
-    fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: creating AF_UNIX socket for DESD control\n",
+    LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: creating AF_UNIX socket for DESD control\n",
             my_router_id, state->thread_id);
     fflush(stderr);
     state->desd_socket_fd = real_socket(AF_UNIX, SOCK_STREAM, 0);
@@ -210,7 +234,7 @@ static int ensure_thread_registered(void) {
     desd_addr.sun_family = AF_UNIX;
     strncpy(desd_addr.sun_path, DESD_CONTROL_SOCKET_PATH, sizeof(desd_addr.sun_path) - 1);
     
-    fprintf(stderr, "[LIBDESHOOK DEBUG] R%d T%d ensure_thread_registered: created control socket fd=%d, connecting to %s\n",
+    LOG_DEBUG("[LIBDESHOOK DEBUG] R%d T%d ensure_thread_registered: created control socket fd=%d, connecting to %s\n",
             my_router_id, state->thread_id, state->desd_socket_fd, DESD_CONTROL_SOCKET_PATH);
     fflush(stderr);
     
@@ -223,7 +247,7 @@ static int ensure_thread_registered(void) {
         return 0;
     }
     
-    fprintf(stderr, "[LIBDESHOOK DEBUG] R%d T%d ensure_thread_registered: connected to desd control socket (fd=%d)\n", 
+    LOG_DEBUG("[LIBDESHOOK DEBUG] R%d T%d ensure_thread_registered: connected to desd control socket (fd=%d)\n", 
             my_router_id, state->thread_id, state->desd_socket_fd);
     fflush(stderr);
     
@@ -250,14 +274,14 @@ static int ensure_thread_registered(void) {
     }
     strncpy(register_req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
     register_req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
-    fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: payload JSON='%s'\n",
+    LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: payload JSON='%s'\n",
             my_router_id, state->thread_id, register_req.payload.json_str);
     fflush(stderr);
     free(payload_str);
     json_decref(payload);
     
     generate_request_id(register_req.request_id);
-    fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: generated request_id='%s'\n",
+    LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: generated request_id='%s'\n",
             my_router_id, state->thread_id, register_req.request_id);
     fflush(stderr);
     
@@ -270,7 +294,7 @@ static int ensure_thread_registered(void) {
         state->registration_in_progress = 0;
         return 0;
     }
-    fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: serialized register_req JSON (without newline) len=%zu\n",
+    LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: serialized register_req JSON (without newline) len=%zu\n",
             my_router_id, state->thread_id, strlen(json_str));
     fflush(stderr);
     
@@ -290,7 +314,7 @@ static int ensure_thread_registered(void) {
     free(json_str);
     
     size_t send_len = strlen(json_with_newline);
-    fprintf(stderr, "[LIBDESHOOK DEBUG] R%d T%d ensure_thread_registered: sending ROUTER_START (len=%zu bytes) on fd=%d, request_id=%s\n",
+    LOG_DEBUG("[LIBDESHOOK DEBUG] R%d T%d ensure_thread_registered: sending ROUTER_START (len=%zu bytes) on fd=%d, request_id=%s\n",
             my_router_id, state->thread_id, send_len, state->desd_socket_fd, register_req.request_id);
     fflush(stderr);
 
@@ -310,12 +334,12 @@ static int ensure_thread_registered(void) {
                 my_router_id, state->thread_id, sent, send_len);
         fflush(stderr);
     }
-    fprintf(stderr, "[LIBDESHOOK DEBUG] R%d T%d ensure_thread_registered: ROUTER_START sent (%zd bytes) on fd=%d, waiting for response...\n",
+    LOG_DEBUG("[LIBDESHOOK DEBUG] R%d T%d ensure_thread_registered: ROUTER_START sent (%zd bytes) on fd=%d, waiting for response...\n",
             my_router_id, state->thread_id, sent, state->desd_socket_fd);
     fflush(stderr);
     
     // Wait for registration response (使用按行拆包的 helper)
-    fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: waiting for registration response using read_one_desd_response\n",
+    LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: waiting for registration response using read_one_desd_response\n",
             my_router_id, state->thread_id);
     fflush(stderr);
     
@@ -328,10 +352,10 @@ static int ensure_thread_registered(void) {
         state->registration_in_progress = 0;
         return 0;
     }
-    fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: received registration response via helper\n",
+    LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: received registration response via helper\n",
             my_router_id, state->thread_id);
     fflush(stderr);
-    fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: parsed response message_type=%d router_id=%d thread_id=%d request_id='%s'\n",
+    LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: parsed response message_type=%d router_id=%d thread_id=%d request_id='%s'\n",
             my_router_id, state->thread_id,
             register_resp.message_type, register_resp.router_id,
             register_resp.thread_id, register_resp.request_id);
@@ -348,11 +372,11 @@ static int ensure_thread_registered(void) {
         return 0;
     }
     const char *status_str = json_string_value(json_object_get(resp_payload, "status"));
-    fprintf(stderr, "[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: response payload status='%s'\n",
+    LOG_TRACE("[LIBDESHOOK TRACE] R%d T%d ensure_thread_registered: response payload status='%s'\n",
             my_router_id, state->thread_id, status_str ? status_str : "(null)");
     fflush(stderr);
     if (status_str && strcmp(status_str, "SUCCESS") == 0) {
-        fprintf(stderr, "[LIBDESHOOK DEBUG] R%d T%d registration SUCCESS.\n", 
+        LOG_DEBUG("[LIBDESHOOK DEBUG] R%d T%d registration SUCCESS.\n", 
                 my_router_id, state->thread_id);
         fflush(stderr);
         state->is_registered = 1;
@@ -458,7 +482,7 @@ static void lib_init(void) {
         _exit(1);
     }
     
-    fprintf(stderr, "[LIBDESHOOK DEBUG] R%d T0 registered with DESD during lib_init.\n", my_router_id);
+    LOG_DEBUG("[LIBDESHOOK DEBUG] R%d T0 registered with DESD during lib_init.\n", my_router_id);
     fflush(stderr);
 }
 
@@ -502,7 +526,7 @@ static int send_msg_to_desd(const Message* req_msg) {
     free(json_str);
     
     // 调试日志：记录即将发送到 DESD 的请求
-    printf("[LIBDESHOOK-REQ] R%d T%d sending request to DESD (event_type=%d, req_id=%s, vt=%.6f)\n",
+    LOG_REQ("[LIBDESHOOK-REQ] R%d T%d sending request to DESD (event_type=%d, req_id=%s, vt=%.6f)\n",
            my_router_id,
            get_current_thread_id(),
            req_msg->event_type,
@@ -719,7 +743,7 @@ static int recv_msg_from_desd_matching(const char* expected_request_id, Message*
         }
         
         // Stale response - discard and try again
-        printf("[LIBDESHOOK] R%d T%d discarding stale response (expected=%s, got=%s, message_type=%d, event_type=%d)\n",
+        LOG_INFO("[LIBDESHOOK] R%d T%d discarding stale response (expected=%s, got=%s, message_type=%d, event_type=%d)\n",
                my_router_id,
                get_current_thread_id(),
                expected_request_id,
@@ -755,7 +779,7 @@ static int send_cancel_block_request(const char* request_id) {
     json_decref(payload_obj);
     
     // 调试日志：记录发送的 CANCEL_BLOCK_REQUEST
-    printf("[LIBDESHOOK-CANCEL] R%d T%d sending CANCEL_BLOCK_REQUEST for blocked_req=%s at VT=%.6f\n",
+    LOG_DEBUG("[LIBDESHOOK-CANCEL] R%d T%d sending CANCEL_BLOCK_REQUEST for blocked_req=%s at VT=%.6f\n",
            my_router_id,
            cancel_req.thread_id,
            request_id,
@@ -776,14 +800,12 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
     }
 
     // 详细调试日志：记录即将发送的 RPC 请求
-    fprintf(stderr,
-            "[LIBDESHOOK-RPC] R%d T%d send_msg_to_desd_and_wait_for_response: preparing to send to DESD (fd=%d, event_type=%d, req_id=%s)\n",
+    LOG_RPC("[LIBDESHOOK-RPC] R%d T%d send_msg_to_desd_and_wait_for_response: preparing to send to DESD (fd=%d, event_type=%d, req_id=%s)\n",
             my_router_id,
             get_current_thread_id(),
             thread_socket,
             req_msg->event_type,
             req_msg->request_id);
-    fflush(stderr);
 
     // Send the request message
     char *json_str = message_to_json(req_msg);
@@ -808,14 +830,12 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
     free(json_str);
 
     size_t send_len = strlen(json_with_newline);
-    fprintf(stderr,
-            "[LIBDESHOOK-RPC] R%d T%d sending %zu bytes to DESD (fd=%d, req_id=%s) ...\n",
+    LOG_RPC("[LIBDESHOOK-RPC] R%d T%d sending %zu bytes to DESD (fd=%d, req_id=%s) ...\n",
             my_router_id,
             get_current_thread_id(),
             send_len,
             thread_socket,
             req_msg->request_id);
-    fflush(stderr);
 
     ssize_t sent = real_send(thread_socket, json_with_newline, send_len, 0);
     if (sent < 0) {
@@ -836,36 +856,30 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
                 req_msg->request_id);
         fflush(stderr);
     } else {
-        fprintf(stderr,
-                "[LIBDESHOOK-RPC] R%d T%d send to DESD completed: sent=%zd bytes (fd=%d, req_id=%s)\n",
+        LOG_RPC("[LIBDESHOOK-RPC] R%d T%d send to DESD completed: sent=%zd bytes (fd=%d, req_id=%s)\n",
                 my_router_id,
                 get_current_thread_id(),
                 sent,
                 thread_socket,
                 req_msg->request_id);
-        fflush(stderr);
     }
     free(json_with_newline);
 
     // Now, synchronously wait for the response from desd
     // 使用 recv_msg_from_desd_matching 按 request_id 精确匹配响应，
     // 丢弃可能存在的陈旧响应（例如之前 fire-and-forget 的 CANCEL_BLOCK_REQUEST 对应的 CANCELLED）。
-    fprintf(stderr,
-            "[HOOK-CONTEXT] R%d T%d RPC_WAIT_START event_type=%d, req_id=%s\n",
+    LOG_HOOK("[HOOK-CONTEXT] R%d T%d RPC_WAIT_START event_type=%d, req_id=%s\n",
             my_router_id,
             get_current_thread_id(),
             req_msg->event_type,
             req_msg->request_id);
-    fprintf(stderr,
-            "[LIBDESHOOK-RPC] R%d T%d waiting for response from DESD for req_id=%s (fd=%d) ...\n",
+    LOG_RPC("[LIBDESHOOK-RPC] R%d T%d waiting for response from DESD for req_id=%s (fd=%d) ...\n",
             my_router_id,
             get_current_thread_id(),
             req_msg->request_id,
             thread_socket);
-    fflush(stderr);
     if (!recv_msg_from_desd_matching(req_msg->request_id, resp_msg_out)) {
-        fprintf(stderr,
-                "[HOOK-CONTEXT] R%d T%d RPC_WAIT_FAILED event_type=%d, req_id=%s\n",
+        LOG_HOOK("[HOOK-CONTEXT] R%d T%d RPC_WAIT_FAILED event_type=%d, req_id=%s\n",
                 my_router_id,
                 get_current_thread_id(),
                 req_msg->event_type,
@@ -876,16 +890,14 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
         return 0;
     }
 
-    fprintf(stderr,
-            "[HOOK-CONTEXT] R%d T%d RPC_WAIT_DONE event_type=%d, req_id=%s\n",
+    LOG_HOOK("[HOOK-CONTEXT] R%d T%d RPC_WAIT_DONE event_type=%d, req_id=%s\n",
             my_router_id,
             get_current_thread_id(),
             req_msg->event_type,
             req_msg->request_id);
-    fflush(stderr);
 
     // 调试日志：记录成功匹配到的响应
-    printf("[LIBDESHOOK-RESP] R%d T%d received matching response from DESD (req_id=%s, resp_event_type=%d)\n",
+    LOG_RESP("[LIBDESHOOK-RESP] R%d T%d received matching response from DESD (req_id=%s, resp_event_type=%d)\n",
            my_router_id,
            get_current_thread_id(),
            resp_msg_out->request_id,
@@ -899,7 +911,7 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
 
 // connect
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
-    printf("[LIBDESHOOK] R%d connect() called: sockfd=%d family=%d\n", 
+    LOG_INFO("[LIBDESHOOK] R%d connect() called: sockfd=%d family=%d\n", 
            my_router_id, sockfd, addr->sa_family);
     fflush(stdout);
     
@@ -941,7 +953,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         snprintf(abstract_address, sizeof(abstract_address), "%s:%d", ip_str, port);
     }
 
-    printf("[LIBDESHOOK] R%d intercepted connect() to %s (family: %s).\n", 
+    LOG_INFO("[LIBDESHOOK] R%d intercepted connect() to %s (family: %s).\n", 
            my_router_id, abstract_address, addr->sa_family == AF_UNIX ? "AF_UNIX" : "AF_INET");
     fflush(stdout);
 
@@ -949,13 +961,13 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     // 典型模式：第一次 connect() 返回 EINPROGRESS，后续调用检查连接状态
     // 对于这种情况，不应该发送新的 CONNECT_REQUEST_EVENT，直接调用 real_connect()
     if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS && connecting_fds[sockfd]) {
-        printf("[LIBDESHOOK] R%d connect() on fd %d: already in connecting state, skipping CONNECT_REQUEST (non-blocking retry).\n",
+        LOG_INFO("[LIBDESHOOK] R%d connect() on fd %d: already in connecting state, skipping CONNECT_REQUEST (non-blocking retry).\n",
                my_router_id, sockfd);
         fflush(stdout);
         
         int result = real_connect(sockfd, addr, addrlen);
         int saved_errno = errno;
-        printf("[LIBDESHOOK] R%d connect() retry real_connect returned: %d (errno=%d %s)\n",
+        LOG_INFO("[LIBDESHOOK] R%d connect() retry real_connect returned: %d (errno=%d %s)\n",
                my_router_id, result, saved_errno,
                saved_errno == EINPROGRESS ? "EINPROGRESS" :
                saved_errno == EISCONN ? "EISCONN" :
@@ -966,7 +978,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         // 如果连接成功或返回 EISCONN，清除 connecting 状态
         if (result == 0 || saved_errno == EISCONN) {
             connecting_fds[sockfd] = 0;
-            printf("[LIBDESHOOK] R%d fd %d connection completed, cleared connecting state.\n", my_router_id, sockfd);
+            LOG_INFO("[LIBDESHOOK] R%d fd %d connection completed, cleared connecting state.\n", my_router_id, sockfd);
         }
         
         errno = saved_errno;
@@ -992,7 +1004,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     free(payload_str);
     json_decref(payload_obj);
 
-    printf("[LIBDESHOOK] R%d connect() sending CONNECT_REQUEST to desd...\n", my_router_id);
+    LOG_INFO("[LIBDESHOOK] R%d connect() sending CONNECT_REQUEST to desd...\n", my_router_id);
     fflush(stdout);
     
     Message connect_resp;
@@ -1008,14 +1020,14 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
 
-            printf("[LIBDESHOOK] R%d connect() to %s successful (DESD confirmed). Now performing real connect.\n",
+            LOG_INFO("[LIBDESHOOK] R%d connect() to %s successful (DESD confirmed). Now performing real connect.\n",
                    my_router_id, abstract_address);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             
             // 标记socket为DES管理
             if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
                 socket_fds[sockfd] = 1;
-                printf("[LIBDESHOOK] R%d marked fd %d as DES-managed socket (after connect).\n", my_router_id, sockfd);
+                LOG_INFO("[LIBDESHOOK] R%d marked fd %d as DES-managed socket (after connect).\n", my_router_id, sockfd);
             }
             
             // 2. DESD确认连接建立事件后，调用真实的connect()
@@ -1025,7 +1037,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
             // 3. 只有服务端需要发送 CONNECTION_INFO_EVENT（通知 accept() 返回的 fd）
             int result = real_connect(sockfd, addr, addrlen);
             int saved_errno = errno;
-            printf("[LIBDESHOOK] R%d connect() real_connect returned: %d (errno=%d %s)\n",
+            LOG_INFO("[LIBDESHOOK] R%d connect() real_connect returned: %d (errno=%d %s)\n",
                    my_router_id, result, saved_errno, 
                    saved_errno == EINPROGRESS ? "EINPROGRESS" :
                    saved_errno == EISCONN ? "EISCONN" : 
@@ -1037,14 +1049,14 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
             if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
                 if (saved_errno == EINPROGRESS) {
                     connecting_fds[sockfd] = 1;
-                    printf("[LIBDESHOOK] R%d fd %d marked as connecting (EINPROGRESS).\n", my_router_id, sockfd);
+                    LOG_INFO("[LIBDESHOOK] R%d fd %d marked as connecting (EINPROGRESS).\n", my_router_id, sockfd);
                 } else if (result == 0) {
                     // 连接立即成功，不需要标记
                     connecting_fds[sockfd] = 0;
                 }
             }
             
-            printf("[LIBDESHOOK] R%d connect() returning result %d to BIRD\n", my_router_id, result);
+            LOG_INFO("[LIBDESHOOK] R%d connect() returning result %d to BIRD\n", my_router_id, result);
             fflush(stdout);
             errno = saved_errno;
             return result;
@@ -1063,7 +1075,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
             if (strstr(error_message, "collision policy") != NULL) {
                 // Collision policy 抑制：这不是真正的错误，只是我们的策略让对端作为 active 侧
                 // 打普通日志，不打 ERROR
-                printf("[LIBDESHOOK] R%d connect() suppressed by collision policy, letting peer initiate.\n", 
+                LOG_INFO("[LIBDESHOOK] R%d connect() suppressed by collision policy, letting peer initiate.\n", 
                        my_router_id);
                 fflush(stdout);
             } else {
@@ -1090,7 +1102,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     }
 
     // 假设是针对ROUTER_SOCKET_PATH的监听socket
-    printf("[LIBDESHOOK] R%d intercepted accept() on sockfd %d.\n", my_router_id, sockfd);
+    LOG_INFO("[LIBDESHOOK] R%d intercepted accept() on sockfd %d.\n", my_router_id, sockfd);
     fflush(stdout);
 
     // 1. 告知desd：发送ROUTER_BLOCK_REQUEST事件（blocked_function=ACCEPT）
@@ -1137,14 +1149,14 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
             
-            printf("[LIBDESHOOK] R%d accept() unblocked by DESD (conn_id=%lu from R%d). Now performing real accept.\n", 
+            LOG_INFO("[LIBDESHOOK] R%d accept() unblocked by DESD (conn_id=%lu from R%d). Now performing real accept.\n", 
                    my_router_id, connection_id, client_router_id);
             fflush(stdout);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             
             // 2. DESD解除阻塞后，调用真实的accept()
             // 阻塞语义：无限循环直到成功或硬错误，EAGAIN/EWOULDBLOCK/EINTR 只在内部重试
-            printf("[LIBDESHOOK-DEBUG] R%d calling real_accept() on sockfd=%d (blocking semantics)...\n", my_router_id, sockfd);
+            LOG_DEBUG("[LIBDESHOOK-DEBUG] R%d calling real_accept() on sockfd=%d (blocking semantics)...\n", my_router_id, sockfd);
             fflush(stdout);
             
             int new_fd = -1;
@@ -1158,7 +1170,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                 
                 if (new_fd >= 0) {
                     // 成功拿到新连接
-                    printf("[LIBDESHOOK-DEBUG] R%d real_accept() succeeded after %d retries: new_fd=%d\n",
+                    LOG_DEBUG("[LIBDESHOOK-DEBUG] R%d real_accept() succeeded after %d retries: new_fd=%d\n",
                            my_router_id, retry_count, new_fd);
                     fflush(stdout);
                     break;
@@ -1168,7 +1180,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                 if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK || saved_errno == EINTR) {
                     // 软错误：暂时没有连接或被信号中断，阻塞等待后重试
                     if (retry_count == 0) {
-                        printf("[LIBDESHOOK-DEBUG] R%d real_accept() returned %s, entering blocking retry loop\n",
+                        LOG_DEBUG("[LIBDESHOOK-DEBUG] R%d real_accept() returned %s, entering blocking retry loop\n",
                                my_router_id, saved_errno == EINTR ? "EINTR" : "EAGAIN");
                         fflush(stdout);
                     }
@@ -1204,7 +1216,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                 }
             }
             
-            printf("[LIBDESHOOK-DEBUG] R%d real_accept() final result: new_fd=%d, errno=%d (%s), total_retries=%d\n", 
+            LOG_DEBUG("[LIBDESHOOK-DEBUG] R%d real_accept() final result: new_fd=%d, errno=%d (%s), total_retries=%d\n", 
                    my_router_id, new_fd, saved_errno, new_fd < 0 ? strerror(saved_errno) : "success", retry_count);
             fflush(stdout);
             
@@ -1236,7 +1248,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                 free(fail_payload_str);
                 json_decref(fail_payload_obj);
                 
-                printf("[LIBDESHOOK] R%d notifying DESD of accept failure for conn_id=%lu\n",
+                LOG_INFO("[LIBDESHOOK] R%d notifying DESD of accept failure for conn_id=%lu\n",
                        my_router_id, connection_id);
                 fflush(stdout);
                 
@@ -1265,7 +1277,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                             o1 == 10 && o2 == 0 && o3 == o4 && o3 > 0 && o3 < 256) {
                             real_peer_router_id = o3;
                         }
-                        printf("[LIBDESHOOK-ACCEPT-PEER] R%d accept() conn_id=%lu expected_peer=R%d real_peer=%s:%d derived_peer=R%d new_fd=%d listen_fd=%d\n",
+                        LOG_DEBUG("[LIBDESHOOK-ACCEPT-PEER] R%d accept() conn_id=%lu expected_peer=R%d real_peer=%s:%d derived_peer=R%d new_fd=%d listen_fd=%d\n",
                                my_router_id, connection_id, client_router_id,
                                ntop_ret ? peer_ip : "<inet_ntop_failed>",
                                peer_port, real_peer_router_id, new_fd, sockfd);
@@ -1279,7 +1291,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
                             fflush(stderr);
                         }
                     } else {
-                        printf("[LIBDESHOOK-ACCEPT-PEER] R%d accept() conn_id=%lu expected_peer=R%d real_peer_family=%d new_fd=%d listen_fd=%d\n",
+                        LOG_DEBUG("[LIBDESHOOK-ACCEPT-PEER] R%d accept() conn_id=%lu expected_peer=R%d real_peer_family=%d new_fd=%d listen_fd=%d\n",
                                my_router_id, connection_id, client_router_id,
                                peer_addr.ss_family, new_fd, sockfd);
                         fflush(stdout);
@@ -1295,7 +1307,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
             }
             
             // 3. accept 成功，发送 CONNECTION_INFO_EVENT 给 desd，通知新连接的 fd
-            printf("[LIBDESHOOK-DEBUG] R%d accept() SUCCESS, new_fd=%d, preparing to send CONNECTION_INFO_EVENT...\n",
+            LOG_DEBUG("[LIBDESHOOK-DEBUG] R%d accept() SUCCESS, new_fd=%d, preparing to send CONNECTION_INFO_EVENT...\n",
                    my_router_id, new_fd);
             fflush(stdout);
             
@@ -1321,28 +1333,28 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
             free(conn_payload_str);
             json_decref(conn_payload_obj);
             
-            printf("[LIBDESHOOK-DEBUG] R%d sending CONNECTION_INFO_EVENT to DESD (req_id=%s, new_fd=%d, conn_id=%lu, real_peer=R%d)...\n",
+            LOG_DEBUG("[LIBDESHOOK-DEBUG] R%d sending CONNECTION_INFO_EVENT to DESD (req_id=%s, new_fd=%d, conn_id=%lu, real_peer=R%d)...\n",
                    my_router_id, conn_info.request_id, new_fd, connection_id, real_peer_router_id);
             fflush(stdout);
             
-            printf("[LIBDESHOOK-DEBUG] R%d sending CONNECTION_INFO_EVENT (req_id=%s) for conn_id=%lu\n", 
+            LOG_DEBUG("[LIBDESHOOK-DEBUG] R%d sending CONNECTION_INFO_EVENT (req_id=%s) for conn_id=%lu\n", 
                    my_router_id, conn_info.request_id, connection_id);
             fflush(stdout);
             
             Message conn_resp;
             if (send_msg_to_desd_and_wait_for_response(&conn_info, &conn_resp)) {
-                printf("[LIBDESHOOK] R%d notified DESD of new connection fd %d. Response received.\n", my_router_id, new_fd);
+                LOG_INFO("[LIBDESHOOK] R%d notified DESD of new connection fd %d. Response received.\n", my_router_id, new_fd);
                 fflush(stdout);
             } else {
                 fprintf(stderr, "[LIBDESHOOK WARNING] R%d failed to notify DESD of new connection.\n", my_router_id);
-                printf("[LIBDESHOOK-DEBUG] R%d send_msg_to_desd_and_wait_for_response failed for CONNECTION_INFO\n", my_router_id);
+                LOG_DEBUG("[LIBDESHOOK-DEBUG] R%d send_msg_to_desd_and_wait_for_response failed for CONNECTION_INFO\n", my_router_id);
                 fflush(stdout);
             }
             
             // 标记新连接的socket为DES管理
             if (new_fd >= 0 && new_fd < MAX_TRACKED_FDS) {
                 socket_fds[new_fd] = 1;
-                printf("[LIBDESHOOK] R%d marked accepted fd %d as DES-managed socket.\n", my_router_id, new_fd);
+                LOG_INFO("[LIBDESHOOK] R%d marked accepted fd %d as DES-managed socket.\n", my_router_id, new_fd);
             }
 
             // 对于成功的accept，也恢复当时的errno（通常为0），避免被内部调用污染
@@ -1392,7 +1404,7 @@ ssize_t send(int sockfd, const void *buf, size_t len, int flags) {
         }
     }
 
-    printf("[LIBDESHOOK] R%d intercepted send() on sockfd %d, len %zu.\n", my_router_id, sockfd, len);
+    LOG_INFO("[LIBDESHOOK] R%d intercepted send() on sockfd %d, len %zu.\n", my_router_id, sockfd, len);
     fflush(stdout);
 
     // 1. 构建 PACKET_SEND_EVENT 消息
@@ -1473,7 +1485,7 @@ ssize_t send(int sockfd, const void *buf, size_t len, int flags) {
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
 
-            printf("[LIBDESHOOK] R%d send() completed (data sent through DESD, len=%ld).\n", my_router_id, len);
+            LOG_INFO("[LIBDESHOOK] R%d send() completed (data sent through DESD, len=%ld).\n", my_router_id, len);
             if (resp_payload_obj) json_decref(resp_payload_obj);
 
             // 数据已通过 desd 传输，不需要调用 real_send()
@@ -1537,12 +1549,12 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
         }
     }
 
-    printf("[LIBDESHOOK] R%d intercepted recv() on sockfd %d, max len %zu.\n", my_router_id, sockfd, len);
+    LOG_INFO("[LIBDESHOOK] R%d intercepted recv() on sockfd %d, max len %zu.\n", my_router_id, sockfd, len);
 
     // 检查是否为非阻塞socket
     int is_nonblocking = (sockfd >= 0 && sockfd < MAX_TRACKED_FDS && nonblocking_fds[sockfd]);
     if (is_nonblocking) {
-        printf("[LIBDESHOOK] R%d recv() on NON-BLOCKING socket fd %d.\n", my_router_id, sockfd);
+        LOG_INFO("[LIBDESHOOK] R%d recv() on NON-BLOCKING socket fd %d.\n", my_router_id, sockfd);
     }
 
     // 向desd注册阻塞请求（如果是非阻塞socket，desd应立即返回状态）
@@ -1572,7 +1584,7 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
         if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
             strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "SUCCESS") == 0) {
             
-            printf("[LIBDESHOOK] R%d recv() unblocked by DESD. Receiving data from DESD.\n", my_router_id);
+            LOG_INFO("[LIBDESHOOK] R%d recv() unblocked by DESD. Receiving data from DESD.\n", my_router_id);
             
             // 从 desd 的响应中读取数据（hex 编码）
             json_t *packet_data_json = json_object_get(resp_payload_obj, "packet_data");
@@ -1602,25 +1614,25 @@ ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
                 ((unsigned char*)buf)[i] = (unsigned char)byte_val;
             }
             
-            printf("[LIBDESHOOK] R%d recv() completed (received %zu bytes from DESD).\n", my_router_id, data_len);
+            LOG_INFO("[LIBDESHOOK] R%d recv() completed (received %zu bytes from DESD).\n", my_router_id, data_len);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             return data_len;
 
         } else if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
                    strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "EOF") == 0) {
             // 对端已关闭连接，返回0表示EOF
-            printf("[LIBDESHOOK] R%d recv() received EOF - peer closed connection.\n", my_router_id);
+            LOG_INFO("[LIBDESHOOK] R%d recv() received EOF - peer closed connection.\n", my_router_id);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             return 0;  // EOF: connection closed by peer
         } else if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
                    strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "TIMEOUT") == 0) {
-            printf("[LIBDESHOOK] R%d recv() timed out.\n", my_router_id);
+            LOG_INFO("[LIBDESHOOK] R%d recv() timed out.\n", my_router_id);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             errno = EAGAIN; // Resource temporarily unavailable (timeout)
             return -1;
         } else if (resp_payload_obj && json_string_value(json_object_get(resp_payload_obj, "status")) &&
                    strcmp(json_string_value(json_object_get(resp_payload_obj, "status")), "EAGAIN") == 0) {
-            printf("[LIBDESHOOK] R%d recv() on non-blocking socket, no data available (EAGAIN).\n", my_router_id);
+            LOG_INFO("[LIBDESHOOK] R%d recv() on non-blocking socket, no data available (EAGAIN).\n", my_router_id);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             errno = EAGAIN; // Resource temporarily unavailable (non-blocking)
             return -1;
@@ -1674,7 +1686,7 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
     static unsigned long poll_call_count = 0;
     unsigned long this_poll_call = ++poll_call_count;
     if (this_poll_call == 1 || this_poll_call == 10 || this_poll_call == 100 || (this_poll_call % 1000) == 0) {
-        printf("[LIBDESHOOK-POLL] R%d T%d poll_internal called %lu time(s) (nfds=%lu, timeout=%d, des_count=%lu, non_des_count=%lu)\n",
+        LOG_POLL("[LIBDESHOOK-POLL] R%d T%d poll_internal called %lu time(s) (nfds=%lu, timeout=%d, des_count=%lu, non_des_count=%lu)\n",
                my_router_id, get_current_thread_id(), this_poll_call,
                (unsigned long)nfds, timeout, (unsigned long)des_count, (unsigned long)non_des_count);
         fflush(stdout);
@@ -1736,7 +1748,7 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         static unsigned long zero_des_poll_count = 0;
         zero_des_poll_count++;
         if (zero_des_poll_count == 1 || zero_des_poll_count == 10 || zero_des_poll_count == 100 || (zero_des_poll_count % 1000) == 0) {
-            printf("[LIBDESHOOK-POLL] R%d T%d zero-des-fd non-blocking poll called %lu time(s) (nfds=%lu, result=%d) - bypassing DESD\n",
+            LOG_POLL("[LIBDESHOOK-POLL] R%d T%d zero-des-fd non-blocking poll called %lu time(s) (nfds=%lu, result=%d) - bypassing DESD\n",
                    my_router_id, get_current_thread_id(), zero_des_poll_count,
                    (unsigned long)nfds, result);
             fflush(stdout);
@@ -1815,7 +1827,7 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
                         break;
                     }
 
-                    printf("[LIBDESHOOK] R%d T%d discarding stale response (expected=%s, got=%s, message_type=%d, event_type=%d)\n",
+                    LOG_INFO("[LIBDESHOOK] R%d T%d discarding stale response (expected=%s, got=%s, message_type=%d, event_type=%d)\n",
                            my_router_id,
                            get_current_thread_id(),
                            saved_request_id,
@@ -1956,7 +1968,7 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
                         break;
                     }
 
-                    printf("[LIBDESHOOK] R%d T%d discarding stale response (expected=%s, got=%s, message_type=%d, event_type=%d)\n",
+                    LOG_INFO("[LIBDESHOOK] R%d T%d discarding stale response (expected=%s, got=%s, message_type=%d, event_type=%d)\n",
                            my_router_id,
                            get_current_thread_id(),
                            saved_request_id,
@@ -2139,7 +2151,7 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         } else if (local_ready_count > 0) {
             // 本地 fd 先 ready，DESD 还没响应
             // ===== 同步 CANCEL 协议 =====
-            printf("[LIBDESHOOK-CANCEL] R%d T%d Phase2 local fd ready first, sending sync CANCEL for req=%s\n",
+            LOG_DEBUG("[LIBDESHOOK-CANCEL] R%d T%d Phase2 local fd ready first, sending sync CANCEL for req=%s\n",
                    my_router_id, get_current_thread_id(), saved_request_id);
             
             send_cancel_block_request(saved_request_id);
@@ -2173,7 +2185,7 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
             }
             if (cancel_payload) json_decref(cancel_payload);
             
-            printf("[LIBDESHOOK-CANCEL] R%d T%d received CANCELLED response for req=%s, returning local ready\n",
+            LOG_DEBUG("[LIBDESHOOK-CANCEL] R%d T%d received CANCELLED response for req=%s, returning local ready\n",
                    my_router_id, get_current_thread_id(), saved_request_id);
             
             // 返回本地 ready 结果
@@ -2242,6 +2254,7 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
         timeout_ms = timeout->tv_sec * 1000 + timeout->tv_usec / 1000;
     }
     
+#if LIBDESHOOK_VERBOSE
     // 极轻量统计 select 包装调用次数，用于确认是否经由 DES 路径
     static unsigned long select_call_count = 0;
     unsigned long this_select_call = ++select_call_count;
@@ -2250,10 +2263,10 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
         this_select_call == 100 ||
         (this_select_call % 1000) == 0) {
         int current_tid = get_current_thread_id();
-        printf("[LIBDESHOOK-SELECT] R%d T%d select() wrapper called %lu time(s) (nfds=%d, timeout_ms=%d)\n",
+        LOG_DEBUG("[LIBDESHOOK-SELECT] R%d T%d select() wrapper called %lu time(s) (nfds=%d, timeout_ms=%d)\n",
                my_router_id, current_tid, this_select_call, nfds, timeout_ms);
-        fflush(stdout);
     }
+#endif
     
     // 如果是非阻塞调用（timeout = 0），直接调用真实的select
     if (timeout != NULL && timeout->tv_sec == 0 && timeout->tv_usec == 0) {
@@ -2429,7 +2442,7 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
 
 // close - 拦截并通知DESD socket关闭，清理FD跟踪标记
 int close(int sockfd) {
-    printf("[LIBDESHOOK] R%d intercepted close() for sockfd %d.\n", my_router_id, sockfd);
+    LOG_INFO("[LIBDESHOOK] R%d intercepted close() for sockfd %d.\n", my_router_id, sockfd);
     
     // 检查是否是当前线程的 DESD 控制 socket
     ThreadState *state = get_thread_state();
@@ -2459,7 +2472,7 @@ int close(int sockfd) {
     
     // 如果是DES管理的socket，通知DESD并等待响应
     if (is_des_socket && get_thread_desd_socket() >= 0) {
-        printf("[LIBDESHOOK] R%d notifying DESD of socket close for fd %d.\n", my_router_id, sockfd);
+        LOG_INFO("[LIBDESHOOK] R%d notifying DESD of socket close for fd %d.\n", my_router_id, sockfd);
         
         // 构建CLOSE_SOCKET_EVENT消息
         Message close_msg;
@@ -2488,7 +2501,7 @@ int close(int sockfd) {
             if (resp_payload_obj) {
                 const char *status = json_string_value(json_object_get(resp_payload_obj, "status"));
                 if (status && strcmp(status, "SUCCESS") == 0) {
-                    printf("[LIBDESHOOK] R%d close() confirmed by DESD for fd %d.\n", my_router_id, sockfd);
+                    LOG_INFO("[LIBDESHOOK] R%d close() confirmed by DESD for fd %d.\n", my_router_id, sockfd);
                 } else {
                     fprintf(stderr, "[LIBDESHOOK WARNING] R%d close() for fd %d, DESD response: %s\n", 
                             my_router_id, sockfd, status ? status : "UNKNOWN");
@@ -2505,7 +2518,7 @@ int close(int sockfd) {
     if (sockfd >= 0 && sockfd < MAX_TRACKED_FDS) {
         pthread_mutex_lock(&socket_fds_mutex);
         if (socket_fds[sockfd] || nonblocking_fds[sockfd] || connecting_fds[sockfd]) {
-            printf("[LIBDESHOOK] R%d clearing tracking for fd %d (socket:%d, nonblocking:%d, connecting:%d).\n", 
+            LOG_INFO("[LIBDESHOOK] R%d clearing tracking for fd %d (socket:%d, nonblocking:%d, connecting:%d).\n", 
                    my_router_id, sockfd, socket_fds[sockfd], nonblocking_fds[sockfd], connecting_fds[sockfd]);
         }
         socket_fds[sockfd] = 0;
@@ -2522,21 +2535,23 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     if (addr->sa_family == AF_UNIX) {
         struct sockaddr_un *un_addr = (struct sockaddr_un *)addr;
         if (strcmp(un_addr->sun_path, ROUTER_SOCKET_PATH) == 0) {
-            printf("[LIBDESHOOK] R%d intercepted bind() to %s. Allowing real bind.\n", my_router_id, ROUTER_SOCKET_PATH);
+            LOG_INFO("[LIBDESHOOK] R%d intercepted bind() to %s. Allowing real bind.\n", my_router_id, ROUTER_SOCKET_PATH);
         }
+#if LIBDESHOOK_VERBOSE
     } else if (addr->sa_family == AF_INET) {
         struct sockaddr_in *tcp_addr = (struct sockaddr_in *)addr;
         char ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(tcp_addr->sin_addr), ip_str, INET_ADDRSTRLEN);
         int port = ntohs(tcp_addr->sin_port);
-        printf("[LIBDESHOOK] R%d intercepted bind() to %s:%d. Allowing real bind.\n", my_router_id, ip_str, port);
+        LOG_INFO("[LIBDESHOOK] R%d intercepted bind() to %s:%d. Allowing real bind.\n", my_router_id, ip_str, port);
+#endif
     }
     return real_bind(sockfd, addr, addrlen);
 }
 
 // listen - 向 desd 通知开始监听
 int listen(int sockfd, int backlog) {
-    printf("[LIBDESHOOK] R%d listen() called: sockfd=%d\n", my_router_id, sockfd);
+    LOG_INFO("[LIBDESHOOK] R%d listen() called: sockfd=%d\n", my_router_id, sockfd);
     fflush(stdout);
     
     if (get_thread_desd_socket() < 0) {
@@ -2552,14 +2567,14 @@ int listen(int sockfd, int backlog) {
             // 过滤BIRD内部控制socket和其他内部通信
             if (strstr(un_addr->sun_path, "/run/bird") != NULL || 
                 strstr(un_addr->sun_path, "bird.ctl") != NULL) {
-                printf("[LIBDESHOOK] R%d skipping listen() on internal socket: %s\n", 
+                LOG_INFO("[LIBDESHOOK] R%d skipping listen() on internal socket: %s\n", 
                        my_router_id, un_addr->sun_path);
                 return real_listen(sockfd, backlog);
             }
         }
     }
 
-    printf("[LIBDESHOOK] R%d intercepted listen() on sockfd %d.\n", my_router_id, sockfd);
+    LOG_INFO("[LIBDESHOOK] R%d intercepted listen() on sockfd %d.\n", my_router_id, sockfd);
 
     // 首先执行真实的 listen()
     int result = real_listen(sockfd, backlog);
@@ -2622,7 +2637,7 @@ int listen(int sockfd, int backlog) {
 
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
-            printf("[LIBDESHOOK] R%d listen() registered with DESD on %s.\n", my_router_id, listen_address);
+            LOG_INFO("[LIBDESHOOK] R%d listen() registered with DESD on %s.\n", my_router_id, listen_address);
             if (resp_payload_obj) json_decref(resp_payload_obj);
         } else {
             fprintf(stderr, "[LIBDESHOOK WARNING] R%d listen() registration with DESD failed.\n", my_router_id);
@@ -2638,7 +2653,7 @@ int listen(int sockfd, int backlog) {
 // unlink - 简单拦截，不与DESD交互
 int unlink(const char *pathname) {
     if (strcmp(pathname, ROUTER_SOCKET_PATH) == 0) {
-        printf("[LIBDESHOOK] R%d intercepted unlink() for %s. Allowing real unlink.\n", my_router_id, ROUTER_SOCKET_PATH);
+        LOG_INFO("[LIBDESHOOK] R%d intercepted unlink() for %s. Allowing real unlink.\n", my_router_id, ROUTER_SOCKET_PATH);
     }
     return real_unlink(pathname);
 }
@@ -2646,20 +2661,21 @@ int unlink(const char *pathname) {
 // socket - 简单拦截，不与DESD交互，但需要标记socket FD
 int socket(int domain, int type, int protocol) {
     int fd = real_socket(domain, type, protocol);
+#if LIBDESHOOK_VERBOSE
     const char* domain_str = (domain == AF_INET) ? "AF_INET" : 
                              (domain == AF_INET6) ? "AF_INET6" :
                              (domain == AF_UNIX) ? "AF_UNIX" :
                              (domain == 16) ? "AF_NETLINK" : "OTHER";
-    printf("[LIBDESHOOK] R%d intercepted socket() call. Created fd: %d, domain: %d (%s), type: %d.\n", 
+    LOG_INFO("[LIBDESHOOK] R%d intercepted socket() call. Created fd: %d, domain: %d (%s), type: %d.\n", 
            my_router_id, fd, domain, domain_str, type);
-    fflush(stdout);
+#endif
     
     // 🔒 线程安全：标记AF_INET/AF_INET6的socket（需要DES管理）
     if (fd >= 0 && fd < MAX_TRACKED_FDS && (domain == AF_INET || domain == AF_INET6)) {
         pthread_mutex_lock(&socket_fds_mutex);
         socket_fds[fd] = 1;
         pthread_mutex_unlock(&socket_fds_mutex);
-        printf("[LIBDESHOOK] R%d marked fd %d as DES-managed socket.\n", my_router_id, fd);
+        LOG_INFO("[LIBDESHOOK] R%d marked fd %d as DES-managed socket.\n", my_router_id, fd);
     }
     
     return fd;
@@ -2671,7 +2687,7 @@ unsigned int sleep(unsigned int seconds) {
         return real_sleep(seconds);
     }
 
-    printf("[LIBDESHOOK] R%d intercepted sleep(%u seconds).\n", my_router_id, seconds);
+    LOG_INFO("[LIBDESHOOK] R%d intercepted sleep(%u seconds).\n", my_router_id, seconds);
 
     // 向desd注册阻塞请求（SLEEP_CALL）
     Message sleep_block_req;
@@ -2706,7 +2722,7 @@ unsigned int sleep(unsigned int seconds) {
         if (status_json && json_is_string(status_json) &&
             strcmp(json_string_value(status_json), "SUCCESS") == 0) {
             
-            printf("[LIBDESHOOK] R%d sleep() completed (virtual time advanced by %u seconds).\n", my_router_id, seconds);
+            LOG_INFO("[LIBDESHOOK] R%d sleep() completed (virtual time advanced by %u seconds).\n", my_router_id, seconds);
             if (resp_payload_obj) json_decref(resp_payload_obj);
             return 0;  // 成功睡眠
         } else {
@@ -2731,22 +2747,22 @@ int fcntl(int fd, int cmd, ...) {
     if (cmd == F_GETFL) {
         // 获取文件状态标志（不需要参数）
         result = real_fcntl(fd, cmd);
-        printf("[LIBDESHOOK] R%d fcntl(F_GETFL) on fd %d: flags=0x%x.\n", my_router_id, fd, result);
+        LOG_INFO("[LIBDESHOOK] R%d fcntl(F_GETFL) on fd %d: flags=0x%x.\n", my_router_id, fd, result);
     } else if (cmd == F_SETFL) {
         // 设置文件状态标志（需要int参数）
         int flags = va_arg(args, int);
         result = real_fcntl(fd, cmd, flags);
         
-        printf("[LIBDESHOOK] R%d fcntl(F_SETFL) on fd %d: flags=0x%x.\n", my_router_id, fd, flags);
+        LOG_INFO("[LIBDESHOOK] R%d fcntl(F_SETFL) on fd %d: flags=0x%x.\n", my_router_id, fd, flags);
         
         // 跟踪非阻塞标志
         if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
             if (flags & O_NONBLOCK) {
                 nonblocking_fds[fd] = 1;
-                printf("[LIBDESHOOK] R%d marked fd %d as NON-BLOCKING.\n", my_router_id, fd);
+                LOG_INFO("[LIBDESHOOK] R%d marked fd %d as NON-BLOCKING.\n", my_router_id, fd);
             } else {
                 nonblocking_fds[fd] = 0;
-                printf("[LIBDESHOOK] R%d marked fd %d as BLOCKING.\n", my_router_id, fd);
+                LOG_INFO("[LIBDESHOOK] R%d marked fd %d as BLOCKING.\n", my_router_id, fd);
             }
         }
     } else if (cmd == F_SETFD || cmd == F_GETFD) {
@@ -2790,7 +2806,7 @@ ssize_t read(int fd, void *buf, size_t count) {
     // 3. 检查是否是DES管理的socket
     if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
         // 这是DES管理的socket，转发到recv()
-        printf("[LIBDESHOOK] R%d read() on socket fd=%d, forwarding to recv().\n", my_router_id, fd);
+        LOG_INFO("[LIBDESHOOK] R%d read() on socket fd=%d, forwarding to recv().\n", my_router_id, fd);
         return recv(fd, buf, count, 0);
     }
     
@@ -2870,7 +2886,7 @@ ssize_t write(int fd, const void *buf, size_t count) {
     // 3. 检查是否是DES管理的socket
     if (fd >= 0 && fd < MAX_TRACKED_FDS && socket_fds[fd]) {
         // 这是DES管理的socket，转发到send()
-        printf("[LIBDESHOOK] R%d write() on socket fd=%d, forwarding to send().\n", my_router_id, fd);
+        LOG_INFO("[LIBDESHOOK] R%d write() on socket fd=%d, forwarding to send().\n", my_router_id, fd);
         return send(fd, buf, count, 0);
     }
     
@@ -2978,13 +2994,14 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
         req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
         free(payload_str);
         
+#if LIBDESHOOK_VERBOSE
         // 详细记录每次 clock_gettime 调用（包含线程ID和序号），用于定位是否卡在此处
         static unsigned long clock_call_count = 0;
         unsigned long this_call = ++clock_call_count;
         int current_tid = get_current_thread_id();
-        printf("[LIBDESHOOK] R%d T%d clock_gettime(CLOCK_MONOTONIC) called (seq=%lu)\n",
+        LOG_INFO("[LIBDESHOOK] R%d T%d clock_gettime(CLOCK_MONOTONIC) called (seq=%lu)\n",
                my_router_id, current_tid, this_call);
-        fflush(stdout);
+#endif
         
         // 发送请求并等待响应
         Message resp;
@@ -3026,12 +3043,15 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
         
         total_clock_calls++;
         
+#if LIBDESHOOK_VERBOSE
         // 打印本次返回的虚拟时间及与上次的差值，帮助观察是否停滞
         double time_delta = (last_reported_vtime >= 0) ? (vtime_sec - last_reported_vtime) : 0;
-        printf("[LIBDESHOOK] R%d T%d clock_gettime() returning VT=%.3f (delta=%.3f, total_calls=%llu, seq=%lu)\n",
+        LOG_INFO("[LIBDESHOOK] R%d T%d clock_gettime() returning VT=%.3f (delta=%.3f, total_calls=%llu, seq=%lu)\n",
                my_router_id, current_tid, vtime_sec, time_delta, total_clock_calls, this_call);
-        fflush(stdout);
         last_reported_vtime = vtime_sec;
+#else
+        (void)last_reported_vtime;  // Suppress unused warning
+#endif
         
         // 转换为timespec
         if (tp) {
@@ -3057,7 +3077,7 @@ static int wait_for_desd_mutex_resume(uintptr_t mutex_addr) {
         return -1;
     }
     
-    printf("[LIBDESHOOK-MUTEX] R%d T%d waiting for MUTEX_RESUME on mutex 0x%lx...\n",
+    LOG_MUTEX("[LIBDESHOOK-MUTEX] R%d T%d waiting for MUTEX_RESUME on mutex 0x%lx...\n",
            my_router_id, state->thread_id, (unsigned long)mutex_addr);
     fflush(stdout);
     
@@ -3080,7 +3100,7 @@ static int wait_for_desd_mutex_resume(uintptr_t mutex_addr) {
             if (payload_obj) {
                 const char *status = json_string_value(json_object_get(payload_obj, "status"));
                 if (status && strcmp(status, "MUTEX_RESUME") == 0) {
-                    printf("[LIBDESHOOK-MUTEX] R%d T%d received MUTEX_RESUME for mutex 0x%lx\n",
+                    LOG_MUTEX("[LIBDESHOOK-MUTEX] R%d T%d received MUTEX_RESUME for mutex 0x%lx\n",
                            my_router_id, state->thread_id, (unsigned long)mutex_addr);
                     fflush(stdout);
                     json_decref(payload_obj);
@@ -3091,7 +3111,7 @@ static int wait_for_desd_mutex_resume(uintptr_t mutex_addr) {
         }
         
         // 收到其他消息，可能是陈旧的响应，丢弃并继续等待
-        printf("[LIBDESHOOK-MUTEX] R%d T%d discarding unexpected message while waiting for MUTEX_RESUME (event_type=%d)\n",
+        LOG_MUTEX("[LIBDESHOOK-MUTEX] R%d T%d discarding unexpected message while waiting for MUTEX_RESUME (event_type=%d)\n",
                my_router_id, state->thread_id, resp.event_type);
         fflush(stdout);
     }
@@ -3176,7 +3196,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
     if (result == 0) {
         // 加锁成功：可选调试日志
         // send_mutex_msg_to_desd(MUTEX_LOCK_ACQUIRED, mutex_addr);
-        printf("[LIBDESHOOK-MUTEX] R%d T%d acquired mutex 0x%lx (no contention)\n",
+        LOG_MUTEX("[LIBDESHOOK-MUTEX] R%d T%d acquired mutex 0x%lx (no contention)\n",
                my_router_id, state->thread_id, (unsigned long)mutex_addr);
         fflush(stdout);
         in_mutex_hook = 0;
@@ -3192,7 +3212,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
     // 2. EBUSY：锁被占用，需要等待
     // 关键点：**绝不**再退回到内核级阻塞锁，否则 DESD 会失去对该线程的控制，导致死锁
     while (1) {
-        printf("[LIBDESHOOK-MUTEX] R%d T%d mutex 0x%lx is busy, notifying DESD...\n",
+        LOG_MUTEX("[LIBDESHOOK-MUTEX] R%d T%d mutex 0x%lx is busy, notifying DESD...\n",
                my_router_id, state->thread_id, (unsigned long)mutex_addr);
         fflush(stdout);
 
@@ -3220,7 +3240,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
         result = real_pthread_mutex_trylock(mutex);
 
         if (result == 0) {
-            printf("[LIBDESHOOK-MUTEX] R%d T%d acquired mutex 0x%lx after DESD resume\n",
+            LOG_MUTEX("[LIBDESHOOK-MUTEX] R%d T%d acquired mutex 0x%lx after DESD resume\n",
                    my_router_id, state->thread_id, (unsigned long)mutex_addr);
             fflush(stdout);
             in_mutex_hook = 0;
@@ -3236,7 +3256,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
         // 2.4 仍然是 EBUSY：说明在我们被唤醒到真正执行 trylock 期间，
         // 锁又被别的线程抢走了。为了保持模拟的确定性，不在这里自旋或退回内核锁，
         // 而是重新通知 DESD 再次进入“等待-唤醒”循环。
-        printf("[LIBDESHOOK-MUTEX] R%d T%d mutex 0x%lx still busy after MUTEX_RESUME, re-entering wait loop...\n",
+        LOG_MUTEX("[LIBDESHOOK-MUTEX] R%d T%d mutex 0x%lx still busy after MUTEX_RESUME, re-entering wait loop...\n",
                my_router_id, state->thread_id, (unsigned long)mutex_addr);
         fflush(stdout);
 
@@ -3271,7 +3291,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex) {
     
     if (result == 0) {
         // 2. 解锁成功，通知 DESD
-        printf("[LIBDESHOOK-MUTEX] R%d T%d released mutex 0x%lx, notifying DESD...\n",
+        LOG_MUTEX("[LIBDESHOOK-MUTEX] R%d T%d released mutex 0x%lx, notifying DESD...\n",
                my_router_id, state->thread_id, (unsigned long)mutex_addr);
         fflush(stdout);
         
