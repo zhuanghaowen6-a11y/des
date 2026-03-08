@@ -261,14 +261,9 @@ sudo docker network create --subnet=10.0.0.0/16 bird_test_net
 log_info "✓ Docker 网络: bird_test_net (10.0.0.0/16)"
 
 # ============================================================
-# 步骤 4: 记录 t0 并创建容器（BIRD 作为主进程）
+# 步骤 4: 创建容器（等待模式，不启动 BIRD）
 # ============================================================
-log_step "步骤 4: 记录 t0 并创建容器（BIRD 作为主进程）"
-
-# 记录 t0（epoch 秒，纳秒精度）
-T0_EPOCH=$(date +%s.%N)
-echo "$T0_EPOCH" > "$RESULT_DIR/meta/t0_epoch.txt"
-log_info "t0 = $T0_EPOCH (已记录)"
+log_step "步骤 4: 创建容器（等待模式，不启动 BIRD）"
 
 for i in $(seq 1 $NUM_ROUTERS); do
     ROUTER_IP="10.0.$i.$i"
@@ -293,15 +288,40 @@ for i in $(seq 1 $NUM_ROUTERS); do
         $CPUSET_OPT \
         -v /tmp/bird_r${i}.conf:/etc/bird/bird.conf:ro \
         ${BIRD_IMAGE} \
-        bird -f -c /etc/bird/bird.conf
+        sh -c 'tail -f /dev/null'
     
-    log_info "✓ R$i 容器已创建并启动 BIRD ($ROUTER_IP)"
+    log_info "✓ R$i 容器已创建 ($ROUTER_IP)"
 done
+
+# ============================================================
+# 步骤 5: 记录 t0 并启动 BIRD（docker exec + 重定向到 PID1 stdout/stderr）
+# ============================================================
+T0_EPOCH=$(date +%s.%N)
+echo "$T0_EPOCH" > "$RESULT_DIR/meta/t0_epoch.txt"
+log_info "t0 = $T0_EPOCH (已记录)"
+
+start_fail=0
+pids=()
+for i in $(seq 1 $NUM_ROUTERS); do
+    sudo docker exec -d r$i sh -c 'bird -f -c /etc/bird/bird.conf > /proc/1/fd/1 2> /proc/1/fd/2' &
+    pids+=("$!")
+done
+
+for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+        start_fail=1
+    fi
+done
+
+if [ "$start_fail" -ne 0 ]; then
+    log_error "启动 BIRD 失败（docker exec 返回非 0）。请检查镜像/容器状态。"
+    exit 1
+fi
 
 # ============================================================
 # 步骤 6: 等待测试时长
 # ============================================================
-log_step "步骤 5: 等待收敛 (${TEST_DURATION}s)"
+log_step "步骤 6: 等待收敛 (${TEST_DURATION}s)"
 
 # 简单等待固定时长（后续可优化为检测静默）
 sleep $TEST_DURATION
@@ -309,7 +329,7 @@ sleep $TEST_DURATION
 # ============================================================
 # 步骤 7: 收集日志（使用 docker logs -t）
 # ============================================================
-log_step "步骤 6: 收集日志"
+log_step "步骤 7: 收集日志"
 
 for i in $(seq 1 $NUM_ROUTERS); do
     # 使用 docker logs -t 获取带时间戳的日志
@@ -324,7 +344,7 @@ log_info "✓ 日志已收集到 $RESULT_DIR/logs/"
 # ============================================================
 # 步骤 8: 分析结果
 # ============================================================
-log_step "步骤 7: 分析结果"
+log_step "步骤 8: 分析结果"
 
 ANALYZE_SCRIPT="${SCRIPT_DIR}/analyze_bgp_logs.py"
 
