@@ -6,7 +6,7 @@
 
 本项目实现并维护一个 **DES（Distributed Event Simulator，分布式事件模拟器）** 框架，用于在 Docker 容器中运行真实路由器软件（例如 BIRD），并通过 **虚拟时间（VT, Virtual Time）** 控制和重放网络事件，从而对控制面/路由面的收敛行为进行可重复、可控的测量与对比。
 
-当前研究主线是：在 **fat-tree-k6（45 路由器）** 等拓扑下测量 BGP 收敛时间，并在不同运行环境中对比：
+当前研究主线是：在 **fat-tree-k6（45 路由器）** 与 **fat-tree-k8-64（64 路由器，非标准）** 等拓扑下测量 BGP 收敛时间，并在不同运行环境中对比：
 
 - DES（VT 标签）
 - container-only（无 DES，wall-clock 时间）
@@ -91,6 +91,19 @@
   - ToR：`R28-R45`
 - ToR 前缀：每个 ToR 通过 `static4` 起源：`192.168.<router_id>.0/24`
 
+### 5.2 fat-tree-k8-64（非标准）
+
+- 路由器数量：`64`
+  - Core：`R1-R16`
+  - Agg：`R17-R40`（6 pod × 4）
+  - ToR：`R41-R64`（6 pod × 4）
+- ToR 前缀：每个 ToR 通过 `static4` 起源：`192.168.<router_id>.0/24`（即 `192.168.41.0/24` 到 `192.168.64.0/24`）
+- 邻居规则：
+  - Core：每台 core 连接到每个 pod 的某一个 agg（6 邻居）
+  - Agg：连接同组的 4 个 core + 同 pod 的 4 个 ToR（8 邻居）
+  - ToR：连接同 pod 的 4 个 agg（4 邻居）
+- 期望有向会话数：`384`
+
 ## 6. container-only 模式（无 DES）
 
 ### 6.1 为什么需要 container-only
@@ -128,7 +141,9 @@
 
 ## 7. 实验对比现象（已观测）
 
-同一拓扑（fat-tree-k6）下，曾观测到：
+### 7.1 fat-tree-k6
+
+同一拓扑下，曾观测到：
 
 - DES（VT）：`T_session ≈ 5.255s VT`，`T_route_rib ≈ 5.689s VT`，`T_update_quiescence ≈ 5.794s VT`
 - container-only（wall-clock）：`T_session ≈ 74s`（显著更大）
@@ -139,6 +154,17 @@
 - wall-clock 包含真实执行开销。
 - container-only 的 `t0` 若定义过早会把容器创建串行耗时算入收敛时间。
 
+### 7.2 fat-tree-k8-64（非标准，64 路由器）
+
+在 container-only 模式（方案 2A，准确 `t0`）下，已成功运行并观测到：
+
+- `T_session ≈ 32.724s`
+- `T_route_rib ≈ 32.745s`
+- `T_update_quiescence ≈ 32.750s`
+- 所有 384 个有向 BGP 会话均成功建立，无异常断开或抖动。
+
+说明：采用先创建全部容器、记录 `t0`、再并行 `docker exec` 启动 BIRD 的方案后，收敛时间进入协议合理时间尺度，不再被容器创建串行耗时污染。
+
 ## 8. ns-3 方向（不使用 DCE）
 
 - 当前阶段：**设计中**，尚未实现。
@@ -148,6 +174,12 @@
 
 ### 9.1 当前状态
 
-- DES（VT）测量链路已跑通。
-- container-only（wall-clock）测量链路已跑通，但需要以方案 2A 的新 `t0` 定义重新跑，验证收敛时间是否从“几十秒”下降到更合理的协议时间尺度。
+- DES（VT）测量链路已跑通（支持 fat-tree-k6 与 fat-tree-k8-64）。
+- container-only（wall-clock）测量链路已跑通，方案 2A（准确 `t0`）已实现并在 fat-tree-k8-64（64 路由器）上成功验证收敛时间约 32s，不再被容器创建耗时污染。
 - ns-3 测量方案仍在设计阶段（未实现）。
+
+### 9.2 可选后续方向
+
+- 在 fat-tree-k8-64 上运行 DES 模式，与 container-only 进行直接对比。
+- 在 container-only 模式下尝试 CPU pinning（每路由器绑定 1 核）以评估调度开销对收敛时间的影响。
+- 继续推进 ns-3 方向的设计与实现。

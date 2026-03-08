@@ -24,14 +24,16 @@ TOPOLOGY_MODE=${TOPOLOGY_MODE,,}
 CPU_PINNING=${CPU_PINNING:-0}
 BIRD_IMAGE=${BIRD_IMAGE:-bird:latest}
 
-if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k6" ]; then
-    echo "[ERROR] TOPOLOGY_MODE must be 'ring', 'full-mesh', or 'fat-tree-k6'"
+if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k6" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k8-64" ]; then
+    echo "[ERROR] TOPOLOGY_MODE must be 'ring', 'full-mesh', 'fat-tree-k6', or 'fat-tree-k8-64'"
     exit 1
 fi
 
 # 根据拓扑确定路由器数量
 if [ "$TOPOLOGY_MODE" = "fat-tree-k6" ]; then
     NUM_ROUTERS=45
+elif [ "$TOPOLOGY_MODE" = "fat-tree-k8-64" ]; then
+    NUM_ROUTERS=64
 elif [ "$TOPOLOGY_MODE" = "ring" ]; then
     NUM_ROUTERS=${NUM_ROUTERS:-10}
 else
@@ -123,9 +125,47 @@ get_fat_tree_k6_neighbors() {
     echo $neighbors
 }
 
+get_fat_tree_k8_64_neighbors() {
+    local router_id=$1
+    local neighbors=""
+
+    if [ $router_id -le 16 ]; then
+        local group=$(( (router_id - 1) / 4 ))
+        for pod in $(seq 0 5); do
+            local agg_id=$((17 + pod * 4 + group))
+            neighbors="$neighbors $agg_id"
+        done
+    elif [ $router_id -le 40 ]; then
+        local idx=$((router_id - 17))
+        local pod=$(( idx / 4 ))
+        local a=$(( idx % 4 ))
+        for core_idx in $(seq 0 3); do
+            local core_id=$((1 + a * 4 + core_idx))
+            neighbors="$neighbors $core_id"
+        done
+        for e in $(seq 0 3); do
+            local tor_id=$((41 + pod * 4 + e))
+            neighbors="$neighbors $tor_id"
+        done
+    else
+        local idx=$((router_id - 41))
+        local pod=$(( idx / 4 ))
+        for a in $(seq 0 3); do
+            local agg_id=$((17 + pod * 4 + a))
+            neighbors="$neighbors $agg_id"
+        done
+    fi
+
+    echo $neighbors
+}
+
 is_tor_router() {
     local router_id=$1
-    [ $router_id -ge 28 ] && [ $router_id -le 45 ]
+    if [ "$TOPOLOGY_MODE" = "fat-tree-k6" ]; then
+        [ $router_id -ge 28 ] && [ $router_id -le 45 ]
+    else
+        [ $router_id -ge 41 ] && [ $router_id -le 64 ]
+    fi
 }
 
 # ============================================================
@@ -185,7 +225,7 @@ protocol kernel {
 EOF
 
     # 只有 ToR 路由器起源前缀（fat-tree-k6 模式）
-    if [ "$TOPOLOGY_MODE" = "fat-tree-k6" ]; then
+    if [ "$TOPOLOGY_MODE" = "fat-tree-k6" ] || [ "$TOPOLOGY_MODE" = "fat-tree-k8-64" ]; then
         if is_tor_router $i; then
             cat >> /tmp/bird_r${i}.conf << EOF
 protocol static static4 {
@@ -218,6 +258,8 @@ EOF
         fi
     elif [ "$TOPOLOGY_MODE" = "fat-tree-k6" ]; then
         NEIGHBORS=$(get_fat_tree_k6_neighbors $i)
+    elif [ "$TOPOLOGY_MODE" = "fat-tree-k8-64" ]; then
+        NEIGHBORS=$(get_fat_tree_k8_64_neighbors $i)
     else
         NEIGHBORS=$(seq 1 $NUM_ROUTERS)
     fi
