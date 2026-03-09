@@ -23,6 +23,7 @@ TOPOLOGY_MODE=${TOPOLOGY_MODE:-${2:-fat-tree-k6}}
 TOPOLOGY_MODE=${TOPOLOGY_MODE,,}
 CPU_PINNING=${CPU_PINNING:-0}
 BIRD_IMAGE=${BIRD_IMAGE:-bird:latest}
+KEEP_ENV=${KEEP_ENV:-0}
 
 if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k6" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k8-64" ]; then
     echo "[ERROR] TOPOLOGY_MODE must be 'ring', 'full-mesh', 'fat-tree-k6', or 'fat-tree-k8-64'"
@@ -78,10 +79,8 @@ log_step() {
 # 清理函数
 cleanup() {
     log_step "清理环境"
-    # for i in $(seq 1 $NUM_ROUTERS); do
-    #     sudo docker stop r$i 2>/dev/null || true
-    #     sudo docker rm r$i 2>/dev/null || true
-    # done
+    sudo docker stop $(seq -f r%g 1 $NUM_ROUTERS) || true
+    sudo docker rm $(seq -f r%g 1 $NUM_ROUTERS) || true
     sudo docker network rm bird_test_net 2>/dev/null || true
     for i in $(seq 1 $NUM_ROUTERS); do
         rm -f /tmp/bird_r${i}.conf
@@ -419,5 +418,6 @@ else
     echo "⚠️ 实验发现问题，详见上方分析报告"
 fi
 
-# 不触发 trap cleanup（保留环境供调试）
-trap - EXIT
+if [ "$KEEP_ENV" -eq 1 ]; then
+    trap - EXIT
+fi
