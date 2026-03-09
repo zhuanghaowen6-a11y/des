@@ -4,8 +4,8 @@
 
 set -e
 
-KEEP_ENV=${KEEP_ENV:-1}        # 默认 1：运行结束不清理，便于调试
-ENABLE_STRACE=${ENABLE_STRACE:-1}  # 默认 1：对每个 BIRD 开启 strace 跟踪
+KEEP_ENV=${KEEP_ENV:-0}        # 默认 0：运行结束清理
+ENABLE_STRACE=${ENABLE_STRACE:-0}  # 默认 0：对每个 BIRD 开启不开启 strace 跟踪
  
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -93,10 +93,8 @@ cleanup() {
     log_step "清理环境"
     
     # 停止所有容器
-    for i in $(seq 1 $NUM_ROUTERS); do
-        sudo docker stop r$i 2>/dev/null || true
-        sudo docker rm r$i 2>/dev/null || true
-    done
+    sudo docker stop $(seq -f r%g 1 $NUM_ROUTERS) || true
+    sudo docker rm $(seq -f r%g 1 $NUM_ROUTERS) || true
     log_info "容器已清理"
     
     # 停止desd

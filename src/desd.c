@@ -1966,11 +1966,11 @@ void desd_event_loop() {
         }
 
         // 调试限制：达到 MAX_TOTAL_EVENTS 个事件后停止
-        if (current_event.event_id >= MAX_TOTAL_EVENTS/10) {
+        if (current_event.event_id >= MAX_TOTAL_EVENTS/30) {
             printf("[DESD-STOP] Reached %d events limit (EventID: %lu). Stopping simulation.\n",
-                   MAX_TOTAL_EVENTS/10, current_event.event_id);
+                   MAX_TOTAL_EVENTS/30, current_event.event_id);
             printf("[DESD-EXIT] Reason: Event limit reached (%d). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
-                   MAX_TOTAL_EVENTS/10, current_virtual_time, heartbeat_event_counter);
+                   MAX_TOTAL_EVENTS/30, current_virtual_time, heartbeat_event_counter);
             exit(0);
         }
 

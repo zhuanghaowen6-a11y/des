@@ -34,3 +34,4 @@ desd_*.log
 *_output.txt
 *_strace.log
 bird.tar
+logs*
