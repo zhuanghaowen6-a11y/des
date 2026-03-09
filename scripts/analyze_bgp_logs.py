@@ -187,6 +187,8 @@ def analyze_route_convergence(log_path, router_id, topology_mode="full-mesh", st
         tor_prefix_pattern = re.compile(r'192\.168\.(2[89]|3[0-9]|4[0-5])\.0/24')
     elif topology_mode == "fat-tree-k8-64":
         tor_prefix_pattern = re.compile(r'192\.168\.(4[1-9]|5[0-9]|6[0-4])\.0/24')
+    elif topology_mode == "fat-tree-k4":
+        tor_prefix_pattern = re.compile(r'192\.168\.(1[3-9]|20)\.0/24')
     else:
         tor_prefix_pattern = re.compile(r'192\.168\.\d+\.0/24')
     
@@ -486,6 +488,28 @@ def get_fat_tree_k8_64_neighbors(router_id):
 
     return neighbors
 
+def get_fat_tree_k4_neighbors(router_id):
+    neighbors = []
+    if router_id <= 4:
+        group = (router_id - 1) // 2
+        for pod in range(4):
+            agg_id = 5 + pod * 2 + group
+            neighbors.append(agg_id)
+    elif router_id <= 12:
+        pod = (router_id - 5) // 2
+        a = (router_id - 5) % 2
+        for idx in range(2):
+            core_id = 1 + a * 2 + idx
+            neighbors.append(core_id)
+        for e in range(2):
+            tor_id = 13 + pod * 2 + e
+            neighbors.append(tor_id)
+    else:
+        pod = (router_id - 13) // 2
+        for a in range(2):
+            agg_id = 5 + pod * 2 + a
+            neighbors.append(agg_id)
+    return neighbors
 
 def build_expected_peers(num_routers, topology_mode):
     """根据拓扑模式构造每个路由器的期望邻居列表。
@@ -523,6 +547,10 @@ def build_expected_peers(num_routers, topology_mode):
     elif topology_mode == "fat-tree-k8-64":
         for router_id in range(1, 65):
             neighbor_ids = get_fat_tree_k8_64_neighbors(router_id)
+            peers_per_router[router_id] = [f"r{n}" for n in neighbor_ids]
+    elif topology_mode == "fat-tree-k4":
+        for router_id in range(1, 21):
+            neighbor_ids = get_fat_tree_k4_neighbors(router_id)
             peers_per_router[router_id] = [f"r{n}" for n in neighbor_ids]
 
     else:  # 默认 full-mesh
@@ -588,6 +616,8 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
         total_expected = 9 * 6 + 18 * 6 + 18 * 3  # 216
     elif topology_mode == "fat-tree-k8-64":
         total_expected = 16 * 6 + 24 * 8 + 24 * 4  # 384
+    elif topology_mode == "fat-tree-k4":
+        total_expected = 4 * 4 + 8 * 4 + 8 * 2  # 64
     else:
         total_expected = num_routers * (num_routers - 1)  # full-mesh
     total_established = 0
@@ -674,7 +704,7 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
     # 3. 总结
     print_header("3. 测试结果总结")
     
-    topo_labels = {"full-mesh": "Full-Mesh", "ring": "Ring", "fat-tree-k6": "Fat-Tree k=6", "fat-tree-k8-64": "Fat-Tree k=8 (non-standard, 6 pods)"}
+    topo_labels = {"full-mesh": "Full-Mesh", "ring": "Ring", "fat-tree-k6": "Fat-Tree k=6", "fat-tree-k8-64": "Fat-Tree k=8 (non-standard, 6 pods)", "fat-tree-k4": "Fat-Tree k=4"}
     topo_label = topo_labels.get(topology_mode, topology_mode)
     print(f"\n{Colors.BOLD}会话统计 ({topo_label}):{Colors.END}")
     print(f"  期望会话数: {total_expected}")
@@ -776,8 +806,8 @@ def main():
     topo_from_arg = sys.argv[3] if len(sys.argv) >= 4 else None
     topo_from_env = os.environ.get("TOPOLOGY_MODE")
     topology_mode = (topo_from_arg or topo_from_env or "full-mesh").lower()
-    if topology_mode not in ("full-mesh", "ring", "fat-tree-k6", "fat-tree-k8-64"):
-        print(f"错误: 不支持的拓扑模式: {topology_mode} (期望: full-mesh, ring, fat-tree-k6 或 fat-tree-k8-64)")
+    if topology_mode not in ("full-mesh", "ring", "fat-tree-k6", "fat-tree-k8-64", "fat-tree-k4"):
+        print(f"错误: 不支持的拓扑模式: {topology_mode} (期望: full-mesh, ring, fat-tree-k6, fat-tree-k8-64 或 fat-tree-k4)")
         sys.exit(1)
     
     if not os.path.isdir(log_dir):

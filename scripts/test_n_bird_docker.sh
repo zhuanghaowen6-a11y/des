@@ -20,8 +20,8 @@ TEST_DURATION=${2:-60}
 TOPOLOGY_MODE=${TOPOLOGY_MODE:-${3:-ring}}
 TOPOLOGY_MODE=${TOPOLOGY_MODE,,}
 
-if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k6" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k8-64" ]; then
-    echo "[ERROR] TOPOLOGY_MODE must be 'ring', 'full-mesh', 'fat-tree-k6', or 'fat-tree-k8-64'"
+if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k6" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k8-64" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k4" ]; then
+    echo "[ERROR] TOPOLOGY_MODE must be 'ring', 'full-mesh', 'fat-tree-k6', 'fat-tree-k8-64', or 'fat-tree-k4'"
     exit 1
 fi
 
@@ -33,6 +33,10 @@ fi
 if [ "$TOPOLOGY_MODE" = "fat-tree-k8-64" ]; then
     NUM_ROUTERS=64
     echo "[INFO] Fat-tree k=8 (non-standard, 6 pods) topology: forcing NUM_ROUTERS=64"
+fi
+if [ "$TOPOLOGY_MODE" = "fat-tree-k4" ]; then
+    NUM_ROUTERS=20
+    echo "[INFO] Fat-tree k=4 topology: forcing NUM_ROUTERS=20"
 fi
 
 if [ "$NUM_ROUTERS" -lt 2 ] || [ "$NUM_ROUTERS" -gt 250 ]; then
@@ -231,13 +235,45 @@ get_fat_tree_k8_64_neighbors() {
     echo $neighbors
 }
 
+get_fat_tree_k4_neighbors() {
+    local router_id=$1
+    local neighbors=""
+    if [ $router_id -le 4 ]; then
+        local group=$(( (router_id - 1) / 2 ))
+        for pod in $(seq 0 3); do
+            local agg_id=$((5 + pod * 2 + group))
+            neighbors="$neighbors $agg_id"
+        done
+    elif [ $router_id -le 12 ]; then
+        local pod=$(( (router_id - 5) / 2 ))
+        local a=$(( (router_id - 5) % 2 ))
+        for idx in $(seq 0 1); do
+            local core_id=$((1 + a * 2 + idx))
+            neighbors="$neighbors $core_id"
+        done
+        for e in $(seq 0 1); do
+            local tor_id=$((13 + pod * 2 + e))
+            neighbors="$neighbors $tor_id"
+        done
+    else
+        local pod=$(( (router_id - 13) / 2 ))
+        for a in $(seq 0 1); do
+            local agg_id=$((5 + pod * 2 + a))
+            neighbors="$neighbors $agg_id"
+        done
+    fi
+    echo $neighbors
+}
+
 # 辅助函数：判断是否是 ToR（只有 ToR 起源前缀）
 is_tor_router() {
     local router_id=$1
     if [ "$TOPOLOGY_MODE" = "fat-tree-k6" ]; then
         [ $router_id -ge 28 ] && [ $router_id -le 45 ]
-    else
+    elif [ "$TOPOLOGY_MODE" = "fat-tree-k8-64" ]; then
         [ $router_id -ge 41 ] && [ $router_id -le 64 ]
+    else
+        [ $router_id -ge 13 ] && [ $router_id -le 20 ]
     fi
 }
 
@@ -314,6 +350,8 @@ EOF
         NEIGHBORS=$(get_fat_tree_k6_neighbors $i)
     elif [ "$TOPOLOGY_MODE" = "fat-tree-k8-64" ]; then
         NEIGHBORS=$(get_fat_tree_k8_64_neighbors $i)
+    elif [ "$TOPOLOGY_MODE" = "fat-tree-k4" ]; then
+        NEIGHBORS=$(get_fat_tree_k4_neighbors $i)
     else
         # full-mesh
         NEIGHBORS=$(seq 1 $NUM_ROUTERS)
