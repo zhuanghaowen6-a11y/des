@@ -1966,11 +1966,11 @@ void desd_event_loop() {
         }
 
         // 调试限制：达到 MAX_TOTAL_EVENTS 个事件后停止
-        if (current_event.event_id >= MAX_TOTAL_EVENTS/30) {
+        if (current_event.event_id >= MAX_TOTAL_EVENTS/10) {
             printf("[DESD-STOP] Reached %d events limit (EventID: %lu). Stopping simulation.\n",
-                   MAX_TOTAL_EVENTS/30, current_event.event_id);
+                   MAX_TOTAL_EVENTS/10, current_event.event_id);
             printf("[DESD-EXIT] Reason: Event limit reached (%d). VT=%.3f, ProcessedEvents=%lu. Code=0 (normal)\n",
-                   MAX_TOTAL_EVENTS/30, current_virtual_time, heartbeat_event_counter);
+                   MAX_TOTAL_EVENTS/10, current_virtual_time, heartbeat_event_counter);
             exit(0);
         }
 
@@ -2365,7 +2365,8 @@ void handle_connect_request_event(Event event) {
         strncpy(ti->blocked_on_function, "CONNECT_CALL", 63);
         ti->blocked_on_function[63] = '\0';
 
-        double connection_delay = 0.05; // 50ms 连接建立延迟
+        //TODO:测试建立延迟影响
+        double connection_delay = 0.005; // 50ms 连接建立延迟
         double connection_established_time = current_virtual_time + connection_delay;
 
         // 使用监听地址查找目标路由器
@@ -3914,7 +3915,8 @@ void handle_packet_send_event(Event event) {
         memset(ti->blocked_on_function, 0, 64);
     }
 
-    double transmission_delay = 0.1; // 0.1s (100ms) - 数据包传输延迟
+    //TODO:测试延迟时间影响
+    double transmission_delay = 0.02; // 0.1s (100ms) - 数据包传输延迟
     double receive_time = current_virtual_time + transmission_delay;
 
     // 使用连接表查找目标路由器
