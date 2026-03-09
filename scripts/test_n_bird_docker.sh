@@ -6,10 +6,11 @@ set -e
 
 KEEP_ENV=${KEEP_ENV:-1}        # 默认 1：运行结束不清理，便于调试
 ENABLE_STRACE=${ENABLE_STRACE:-1}  # 默认 1：对每个 BIRD 开启 strace 跟踪
-
-PROJECT_ROOT="/home/hwzhuang/hwzhuang/desTest/des_design"
+ 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
-
+ 
 # 脚本所在目录（用于定位 analyze_bgp_logs.py 等辅助脚本）
 SCRIPT_DIR="${PROJECT_ROOT}/scripts"
 

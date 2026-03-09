@@ -4,7 +4,8 @@
 
 set -e  # 遇到错误立即退出
 
-PROJECT_ROOT="/home/hwzhuang/hwzhuang/desTest/des_design"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # 日志函数（简化格式，避免颜色干扰）
