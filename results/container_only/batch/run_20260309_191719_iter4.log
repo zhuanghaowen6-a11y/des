@@ -1,0 +1,419 @@
+==========================================
+Container-Only BGP Convergence Test
+==========================================
+Routers: 45
+Test Duration: 180s
+Topology: fat-tree-k6
+CPU Pinning: 0
+BIRD Image: bird:latest
+Result Dir: results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303
+==========================================
+
+==========================================
+ 步骤 1: 记录实验元数据
+==========================================
+[INFO] 元数据已记录到 results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/meta/
+
+==========================================
+ 步骤 2: 生成 BIRD 配置文件
+==========================================
+[INFO] ✓ 配置文件已生成并存档
+
+==========================================
+ 步骤 3: 创建 Docker 网络
+==========================================
+f4da70086de62e3b1b0f141d2b6fe7ad87214a20fb6804d6a382bc4cedf09953
+[INFO] ✓ Docker 网络: bird_test_net (10.0.0.0/16)
+
+==========================================
+ 步骤 4: 创建容器（等待模式，不启动 BIRD）
+==========================================
+b2686d7b46ccc5f1a1b867255b3c66bf0ecbc3479b9887d4eea3d789dba1440c
+[INFO] ✓ R1 容器已创建 (10.0.1.1)
+c468d687d2740116998647c46996a4f14ac6f56c0f8d378d429c59405f08deff
+[INFO] ✓ R2 容器已创建 (10.0.2.2)
+457c8c113f7f5b8d8306b107886fe7571dfa533e264a39bd93169d352202a1d6
+[INFO] ✓ R3 容器已创建 (10.0.3.3)
+c3fe30d8017b9b831d5cf6e9ae4b926848df88e7a1f4b1f920914f52b9994c1b
+[INFO] ✓ R4 容器已创建 (10.0.4.4)
+34f0daf142d4186b7270ba38caa4454bf6049e5af92c99742c0765b7c866d51f
+[INFO] ✓ R5 容器已创建 (10.0.5.5)
+5f417a423ed06f282e2cb4a40ed696dc2b81024ae2a22361913bcfe1d6d5e5a1
+[INFO] ✓ R6 容器已创建 (10.0.6.6)
+ab24aa2f449205ba043d43067dd27c83248122181dc386c3cccc14fdd353af48
+[INFO] ✓ R7 容器已创建 (10.0.7.7)
+e52634e43995c23deeb8118d3eace87407bc7b23c7a0fef94c7148d169d467ad
+[INFO] ✓ R8 容器已创建 (10.0.8.8)
+b37d356e5f7f7c7c2d536bdbedfe0d3c2d87f572462731bd1c32989fd8743ce7
+[INFO] ✓ R9 容器已创建 (10.0.9.9)
+da33c3060df6da2c4b04709c32e76f28862e435918cb8af46b1d02d6a4618d7a
+[INFO] ✓ R10 容器已创建 (10.0.10.10)
+72e7c9b027a20f57d04c8a10ca7330f4a724a503fdb730074faa7a088328d9a9
+[INFO] ✓ R11 容器已创建 (10.0.11.11)
+a5b4fa29fa0b4db85c0c2b203c7c0916ccde6f5c6296f4230284a8c90ce6fa80
+[INFO] ✓ R12 容器已创建 (10.0.12.12)
+6ff87870c5c890d1d1785b775b1d643612524cc579fdd3237568e05dcd10ef3b
+[INFO] ✓ R13 容器已创建 (10.0.13.13)
+698cb3b9fd52cb9db8f73e1e69067c149bb43dc26c56e9b904739cc63ac06800
+[INFO] ✓ R14 容器已创建 (10.0.14.14)
+8d85f7824240cde3ad19b618869c02f300e7c5531b0c22a60e2938672b410354
+[INFO] ✓ R15 容器已创建 (10.0.15.15)
+7cfa4e9d00e43ee3bb36e76420992b2a9590e1ee9784ff4d233333246861fa59
+[INFO] ✓ R16 容器已创建 (10.0.16.16)
+552c3c4e77627bf3c6cae83b576cc34769241a71a2e1de9ffe39bbe2af97c5cd
+[INFO] ✓ R17 容器已创建 (10.0.17.17)
+0070195dbdd327a0fe6e24e9fac7224c44a8e16478e5a62c9b9aaeaec834f32e
+[INFO] ✓ R18 容器已创建 (10.0.18.18)
+cffe7a4b825f670ffee0f118b53c418cadc244e6103fd077c5e7137434c814cf
+[INFO] ✓ R19 容器已创建 (10.0.19.19)
+bc00156561d0f1aa1fbfc5e703255cc6b7111817e35e45f7bfe237340c04ecbc
+[INFO] ✓ R20 容器已创建 (10.0.20.20)
+b42595496fa9e940ac3433d266384d006a3295651cdbfddff5606a3dde72bfc0
+[INFO] ✓ R21 容器已创建 (10.0.21.21)
+47f4d82f13c09da761334840a675f5fd3e347cbe561fc384636181873a703f2d
+[INFO] ✓ R22 容器已创建 (10.0.22.22)
+6f369f6306fbad7c17863baf36fccca4b86eb2f9e335901e10c81c4019a8e854
+[INFO] ✓ R23 容器已创建 (10.0.23.23)
+33580c6a1e9d84d1240f6d3f655dc8d05a2b886221b9d39e37b4a8bf05639f17
+[INFO] ✓ R24 容器已创建 (10.0.24.24)
+cd6f1daecfa22f556090815ec745e9b7e31c8e47c3d290601c2d5b781c0e6a41
+[INFO] ✓ R25 容器已创建 (10.0.25.25)
+465e017001f8123ad33963499ebaad1e0229af6b958b4ce24efb3af510dd6282
+[INFO] ✓ R26 容器已创建 (10.0.26.26)
+0c869c074889bf1e19daaa1be85edaf752539e6009320414d0508f6d4ca5ceec
+[INFO] ✓ R27 容器已创建 (10.0.27.27)
+76f733838629e5acac8182e321cf61dd260e170c6cb129f5e54e69d8538a2a88
+[INFO] ✓ R28 容器已创建 (10.0.28.28)
+929ba42b2304b920516c42516e0edae97018d56d7a8414dc6521abb16ff32e55
+[INFO] ✓ R29 容器已创建 (10.0.29.29)
+bff39e8744b68b453a519804aa81a26d1b579d30e7b15fc7149e17b8a3c0b56c
+[INFO] ✓ R30 容器已创建 (10.0.30.30)
+ed4251f923479c9685162b908aacc2daf38faa654f58bd33fb71b03495d39428
+[INFO] ✓ R31 容器已创建 (10.0.31.31)
+bd83d4a7e3695f62f47288f77a1d232af3d1babe9737a7708d770285040f46f1
+[INFO] ✓ R32 容器已创建 (10.0.32.32)
+bb25c965cfc277c222a8e11859fb258e8f8140d00e9f75b9590319c795585ed4
+[INFO] ✓ R33 容器已创建 (10.0.33.33)
+b607777f91f3a78ead6eda215e69d3ebd75da5301999247094539e01f0f9f37e
+[INFO] ✓ R34 容器已创建 (10.0.34.34)
+862c455796d3c456a9e0cb02d648545933f3d3db581d7ff930fb363a8072f15e
+[INFO] ✓ R35 容器已创建 (10.0.35.35)
+6de391b8b63e017734b621bf3fcfd28f53e476f4941bfca4136c2032515a71a3
+[INFO] ✓ R36 容器已创建 (10.0.36.36)
+817590a1406eec71893d28468288dcabfb6c2619a652913db52673a1438630cc
+[INFO] ✓ R37 容器已创建 (10.0.37.37)
+174e293f61176416eaaeaf61d294b4d2d810b8b92dadcc53364d6d9f2662dc61
+[INFO] ✓ R38 容器已创建 (10.0.38.38)
+b3c0e654226be50fc5ff8236fac84ee6d66e4b66a726438e1a2d1b3a5dc8476b
+[INFO] ✓ R39 容器已创建 (10.0.39.39)
+d65779cd852e91d7e5fc1861937f2f33942ebb154d8d5723c1af964e8ccdffa1
+[INFO] ✓ R40 容器已创建 (10.0.40.40)
+b333bfc7e06b7910df1c1b7092037464f8bb4d24cccf3f90411d2b972c6d2136
+[INFO] ✓ R41 容器已创建 (10.0.41.41)
+fe8a693f13d04387af92aafee37e0d722779ee6a93b4e85ebde7cfe6c4c30d9c
+[INFO] ✓ R42 容器已创建 (10.0.42.42)
+4c1cd4c2d604ea1a20e07fe5488f753b4778b761c47d06a4c1bfbf4fa1ebeb19
+[INFO] ✓ R43 容器已创建 (10.0.43.43)
+ad620b92e55c8d3538f2b6b94c60481dc05f8039cf19e5669fd814e1c70d49d5
+[INFO] ✓ R44 容器已创建 (10.0.44.44)
+098568d3469d7389d1e4cff3f1f3b850c945c88f2c5f14412ec6487ecbd2e98e
+[INFO] ✓ R45 容器已创建 (10.0.45.45)
+[INFO] t0 = 1773056062.022116615 (已记录)
+
+==========================================
+ 步骤 6: 等待收敛 (180s)
+==========================================
+
+==========================================
+ 步骤 7: 收集日志
+==========================================
+[INFO] ✓ 日志已收集到 results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/
+
+==========================================
+ 步骤 8: 分析结果
+==========================================
+[94mℹ 已加载 t0 = 1773056062.022117 (from results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/meta/t0_epoch.txt)[0m
+
+[1m============================================================[0m
+[1m BGP 日志分析报告 (时间模式: wall-clock)[0m
+[1m============================================================[0m
+
+[1m============================================================[0m
+[1m 1. 容器-only 模式 (无 DESD)[0m
+[1m============================================================[0m
+[94mℹ 跳过 DESD 日志检查（wallclock 模式）[0m
+
+[1m============================================================[0m
+[1m 2. BGP 会话状态检查[0m
+[1m============================================================[0m
+[94mℹ 拓扑模式: fat-tree-k6[0m
+
+[1mR1 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r1.log):[0m
+[92m✓ 已建立会话: r10, r13, r16, r19, r22, r25[0m
+
+[1mR2 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r2.log):[0m
+[92m✓ 已建立会话: r10, r13, r16, r19, r22, r25[0m
+
+[1mR3 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r3.log):[0m
+[92m✓ 已建立会话: r10, r13, r16, r19, r22, r25[0m
+
+[1mR4 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r4.log):[0m
+[92m✓ 已建立会话: r11, r14, r17, r20, r23, r26[0m
+
+[1mR5 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r5.log):[0m
+[92m✓ 已建立会话: r11, r14, r17, r20, r23, r26[0m
+
+[1mR6 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r6.log):[0m
+[92m✓ 已建立会话: r11, r14, r17, r20, r23, r26[0m
+
+[1mR7 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r7.log):[0m
+[92m✓ 已建立会话: r12, r15, r18, r21, r24, r27[0m
+
+[1mR8 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r8.log):[0m
+[92m✓ 已建立会话: r12, r15, r18, r21, r24, r27[0m
+
+[1mR9 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r9.log):[0m
+[92m✓ 已建立会话: r12, r15, r18, r21, r24, r27[0m
+
+[1mR10 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r10.log):[0m
+[92m✓ 已建立会话: r1, r2, r28, r29, r3, r30[0m
+
+[1mR11 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r11.log):[0m
+[92m✓ 已建立会话: r28, r29, r30, r4, r5, r6[0m
+
+[1mR12 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r12.log):[0m
+[92m✓ 已建立会话: r28, r29, r30, r7, r8, r9[0m
+
+[1mR13 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r13.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r31, r32, r33[0m
+
+[1mR14 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r14.log):[0m
+[92m✓ 已建立会话: r31, r32, r33, r4, r5, r6[0m
+
+[1mR15 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r15.log):[0m
+[92m✓ 已建立会话: r31, r32, r33, r7, r8, r9[0m
+
+[1mR16 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r16.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r34, r35, r36[0m
+
+[1mR17 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r17.log):[0m
+[92m✓ 已建立会话: r34, r35, r36, r4, r5, r6[0m
+
+[1mR18 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r18.log):[0m
+[92m✓ 已建立会话: r34, r35, r36, r7, r8, r9[0m
+
+[1mR19 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r19.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r37, r38, r39[0m
+
+[1mR20 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r20.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r4, r5, r6[0m
+
+[1mR21 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r21.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r7, r8, r9[0m
+
+[1mR22 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r22.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r40, r41, r42[0m
+
+[1mR23 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r23.log):[0m
+[92m✓ 已建立会话: r4, r40, r41, r42, r5, r6[0m
+
+[1mR24 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r24.log):[0m
+[92m✓ 已建立会话: r40, r41, r42, r7, r8, r9[0m
+
+[1mR25 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r25.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r43, r44, r45[0m
+
+[1mR26 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r26.log):[0m
+[92m✓ 已建立会话: r4, r43, r44, r45, r5, r6[0m
+
+[1mR27 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r27.log):[0m
+[92m✓ 已建立会话: r43, r44, r45, r7, r8, r9[0m
+
+[1mR28 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r28.log):[0m
+[92m✓ 已建立会话: r10, r11, r12[0m
+
+[1mR29 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r29.log):[0m
+[92m✓ 已建立会话: r10, r11, r12[0m
+
+[1mR30 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r30.log):[0m
+[92m✓ 已建立会话: r10, r11, r12[0m
+
+[1mR31 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r31.log):[0m
+[92m✓ 已建立会话: r13, r14, r15[0m
+
+[1mR32 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r32.log):[0m
+[92m✓ 已建立会话: r13, r14, r15[0m
+
+[1mR33 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r33.log):[0m
+[92m✓ 已建立会话: r13, r14, r15[0m
+
+[1mR34 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r34.log):[0m
+[92m✓ 已建立会话: r16, r17, r18[0m
+
+[1mR35 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r35.log):[0m
+[92m✓ 已建立会话: r16, r17, r18[0m
+
+[1mR36 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r36.log):[0m
+[92m✓ 已建立会话: r16, r17, r18[0m
+
+[1mR37 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r37.log):[0m
+[92m✓ 已建立会话: r19, r20, r21[0m
+
+[1mR38 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r38.log):[0m
+[92m✓ 已建立会话: r19, r20, r21[0m
+
+[1mR39 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r39.log):[0m
+[92m✓ 已建立会话: r19, r20, r21[0m
+
+[1mR40 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r40.log):[0m
+[92m✓ 已建立会话: r22, r23, r24[0m
+
+[1mR41 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r41.log):[0m
+[92m✓ 已建立会话: r22, r23, r24[0m
+
+[1mR42 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r42.log):[0m
+[92m✓ 已建立会话: r22, r23, r24[0m
+
+[1mR43 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r43.log):[0m
+[92m✓ 已建立会话: r25, r26, r27[0m
+
+[1mR44 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r44.log):[0m
+[92m✓ 已建立会话: r25, r26, r27[0m
+
+[1mR45 (results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303/logs/bird_r45.log):[0m
+[92m✓ 已建立会话: r25, r26, r27[0m
+
+[1m============================================================[0m
+[1m 3. 测试结果总结[0m
+[1m============================================================[0m
+
+[1m会话统计 (Fat-Tree k=6):[0m
+  期望会话数: 216
+  成功建立数: 216
+  从未建立数: 0
+  异常断开数: 0 (最终状态为 down)
+  抖动会话数: 0 (>= 3 次 close/down)
+
+[1m收敛时间 (基于 wall-clock):[0m
+  T_session (最后一个会话建立): [92m14.889s[0m
+  带时间戳的会话数: 216/216
+
+[1m路由收敛时间 (基于 wall-clock):[0m
+  T_route_rib (最后一次 best 路由变更): [92m14.970s[0m
+  检测到的 [best] 路由变更数: 2312
+  T_update_quiescence (最后一次路由更新): [92m14.981s[0m
+  检测到的路由更新事件数: 16307
+
+[1m最终判定:[0m
+
+[92m[1m============================================================[0m
+[92m[1m ✓ PASS: 所有 BGP 会话在容器-only期间保持健康[0m
+[92m[1m============================================================[0m
+
+
+==========================================
+ 实验完成
+==========================================
+
+结果目录: results/container_only/no_pinning/fat-tree-k6_n45_20260309_193303
+  - logs/     : BIRD 日志（带 docker 时间戳）
+  - configs/  : BIRD 配置文件
+  - meta/     : 元数据（t0、环境、宿主机信息）
+
+🎉 实验成功！
+
+==========================================
+ 清理环境
+==========================================
+r1
+r2
+r3
+r4
+r5
+r6
+r7
+r8
+r9
+r10
+r11
+r12
+r13
+r14
+r15
+r16
+r17
+r18
+r19
+r20
+r21
+r22
+r23
+r24
+r25
+r26
+r27
+r28
+r29
+r30
+r31
+r32
+r33
+r34
+r35
+r36
+r37
+r38
+r39
+r40
+r41
+r42
+r43
+r44
+r45
+r1
+r2
+r3
+r4
+r5
+r6
+r7
+r8
+r9
+r10
+r11
+r12
+r13
+r14
+r15
+r16
+r17
+r18
+r19
+r20
+r21
+r22
+r23
+r24
+r25
+r26
+r27
+r28
+r29
+r30
+r31
+r32
+r33
+r34
+r35
+r36
+r37
+r38
+r39
+r40
+r41
+r42
+r43
+r44
+r45
+bird_test_net
+[INFO] 环境已清理

@@ -1,0 +1,11 @@
+iteration,start_time,result_dir,T_session,T_route_rib,T_update_quiescence
+1,2026-03-09_18:08:17,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_180817,33.755,34.009,34.013
+2,2026-03-09_18:15:16,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_181516,25.123,25.181,25.182
+3,2026-03-09_18:22:11,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_182211,25.527,25.558,25.558
+4,2026-03-09_18:28:44,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_182844,24.813,24.833,24.834
+5,2026-03-09_18:35:11,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_183511,24.177,24.204,24.205
+6,2026-03-09_18:41:47,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_184147,23.873,24.628,24.645
+7,2026-03-09_18:48:00,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_184800,26.692,26.735,26.736
+8,2026-03-09_18:54:22,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_185422,26.678,26.793,26.795
+9,2026-03-09_19:00:51,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_190051,27.196,27.259,27.280
+10,2026-03-09_19:07:29,results/container_only/no_pinning/fat-tree-k8-64_n64_20260309_190729,23.559,23.591,23.592

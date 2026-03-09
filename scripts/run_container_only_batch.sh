@@ -7,6 +7,14 @@ cd "$PROJECT_ROOT"
 TEST_DURATION="${1:-180}"
 TOPOLOGY_MODE="${2:-fat-tree-k8-64}"
 ITERATIONS="${ITERATIONS:-10}"
+CPU_PINNING="${CPU_PINNING:-1}"
+PINNING_ARG="${3:-}"
+if [ -n "$PINNING_ARG" ]; then
+  case "$PINNING_ARG" in
+    0|no|nopin|false) CPU_PINNING=0 ;;
+    *) CPU_PINNING=1 ;;
+  esac
+fi
 TOPOLOGY_MODE="$(echo "$TOPOLOGY_MODE" | tr '[:upper:]' '[:lower:]')"
 case "$TOPOLOGY_MODE" in
   fat-tree-k6) NUM_ROUTERS=45 ;;
@@ -15,10 +23,11 @@ case "$TOPOLOGY_MODE" in
   ring) NUM_ROUTERS="${NUM_ROUTERS:-10}" ;;
   *) NUM_ROUTERS="${NUM_ROUTERS:-5}" ;;
 esac
+PINNING_LABEL=$([ "$CPU_PINNING" -eq 1 ] && echo "with_pinning" || echo "no_pinning")
 BATCH_DIR="results/container_only/batch"
 mkdir -p "$BATCH_DIR"
 START_TS="$(date +%Y%m%d_%H%M%S)"
-BATCH_FILE="$BATCH_DIR/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_pinned_${TEST_DURATION}s_${START_TS}.csv"
+BATCH_FILE="$BATCH_DIR/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_${PINNING_LABEL}_${TEST_DURATION}s_${START_TS}.csv"
 if [ ! -f "$BATCH_FILE" ]; then
   echo "iteration,start_time,result_dir,T_session,T_route_rib,T_update_quiescence" > "$BATCH_FILE"
 fi
@@ -35,7 +44,7 @@ for i in $(seq 1 "$ITERATIONS"); do
   fi
   RESULT_DIR="$(awk -F': ' '/^(结果目录|Result Dir): /{print $2}' "$RUN_LOG" | tail -n 1)"
   if [ -z "$RESULT_DIR" ]; then
-    RESULT_DIR="$(ls -dt results/container_only/with_pinning/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_* 2>/dev/null | head -n 1)"
+    RESULT_DIR="$(ls -dt results/container_only/${PINNING_LABEL}/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_* 2>/dev/null | head -n 1)"
   fi
   if [ -z "$RESULT_DIR" ] || [ ! -d "$RESULT_DIR" ]; then
     echo "${i},${RUN_START},,," >> "$BATCH_FILE"
