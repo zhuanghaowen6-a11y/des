@@ -1101,6 +1101,25 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
         return real_accept(sockfd, addr, addrlen);
     }
 
+    // 检查是否是 AF_UNIX 控制 socket（如 bird.ctl），如果是则 bypass DESD
+    struct sockaddr_storage listen_addr;
+    socklen_t listen_addr_len = sizeof(listen_addr);
+    if (getsockname(sockfd, (struct sockaddr *)&listen_addr, &listen_addr_len) == 0) {
+        if (listen_addr.ss_family == AF_UNIX) {
+            struct sockaddr_un *un_addr = (struct sockaddr_un *)&listen_addr;
+            // 对 BIRD 控制 socket 进行 bypass（路径包含 /run/bird 或 bird.ctl）
+            if (strstr(un_addr->sun_path, "/run/bird") != NULL ||
+                strstr(un_addr->sun_path, "bird.ctl") != NULL ||
+                strstr(un_addr->sun_path, "bird6.ctl") != NULL) {
+                printf("[LIBDESHOOK] R%d accept() bypassing DESD for BIRD control socket: %s\n",
+                       my_router_id, un_addr->sun_path);
+                return real_accept(sockfd, addr, addrlen);
+            }
+            // 所有其他 AF_UNIX socket 也 bypass（保守策略，避免虚拟化本地通信）
+            return real_accept(sockfd, addr, addrlen);
+        }
+    }
+
     // 假设是针对ROUTER_SOCKET_PATH的监听socket
     LOG_INFO("[LIBDESHOOK] R%d intercepted accept() on sockfd %d.\n", my_router_id, sockfd);
     fflush(stdout);
