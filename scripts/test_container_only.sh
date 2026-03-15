@@ -22,8 +22,10 @@ TEST_DURATION=${1:-120}
 TOPOLOGY_MODE=${TOPOLOGY_MODE:-${2:-fat-tree-k6}}
 TOPOLOGY_MODE=${TOPOLOGY_MODE,,}
 CPU_PINNING=${CPU_PINNING:-0}
+GLOBAL_CPUSET=${GLOBAL_CPUSET:-}
 BIRD_IMAGE=${BIRD_IMAGE:-bird:latest}
 KEEP_ENV=${KEEP_ENV:-0}
+SKIP_ANALYZE=${SKIP_ANALYZE:-0}
 
 if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k6" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k8-64" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k4" ]; then
     echo "[ERROR] TOPOLOGY_MODE must be 'ring', 'full-mesh', 'fat-tree-k6', 'fat-tree-k8-64', or 'fat-tree-k4'"
@@ -45,10 +47,14 @@ fi
 
 # 创建结果目录
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-if [ "$CPU_PINNING" -eq 1 ]; then
-    RESULT_DIR="results/container_only/with_pinning/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_${TIMESTAMP}"
+if [ -n "${RESULT_DIR_OVERRIDE:-}" ]; then
+    RESULT_DIR="$RESULT_DIR_OVERRIDE"
 else
-    RESULT_DIR="results/container_only/no_pinning/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_${TIMESTAMP}"
+    if [ "$CPU_PINNING" -eq 1 ]; then
+        RESULT_DIR="results/container_only/with_pinning/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_${TIMESTAMP}"
+    else
+        RESULT_DIR="results/container_only/no_pinning/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_${TIMESTAMP}"
+    fi
 fi
 mkdir -p "$RESULT_DIR/logs" "$RESULT_DIR/configs" "$RESULT_DIR/meta"
 
@@ -59,6 +65,7 @@ echo "Routers: $NUM_ROUTERS"
 echo "Test Duration: ${TEST_DURATION}s"
 echo "Topology: $TOPOLOGY_MODE"
 echo "CPU Pinning: $CPU_PINNING"
+echo "Global CPUSet: ${GLOBAL_CPUSET:-<none>}"
 echo "BIRD Image: $BIRD_IMAGE"
 echo "Result Dir: $RESULT_DIR"
 echo "=========================================="
@@ -212,6 +219,7 @@ TOPOLOGY_MODE=$TOPOLOGY_MODE
 NUM_ROUTERS=$NUM_ROUTERS
 TEST_DURATION=$TEST_DURATION
 CPU_PINNING=$CPU_PINNING
+GLOBAL_CPUSET=$GLOBAL_CPUSET
 BIRD_IMAGE=$BIRD_IMAGE
 TIMESTAMP=$TIMESTAMP
 EOF
@@ -348,10 +356,14 @@ for i in $(seq 1 $NUM_ROUTERS); do
     
     # CPU pinning 选项
     CPUSET_OPT=""
-    if [ "$CPU_PINNING" -eq 1 ]; then
-        # 每个路由器绑定一个核（简单轮询分配）
-        CORE_ID=$(( (i - 1) % $(nproc) ))
-        CPUSET_OPT="--cpuset-cpus=$CORE_ID"
+    if [ -n "${GLOBAL_CPUSET:-}" ]; then
+        CPUSET_OPT="--cpuset-cpus=$GLOBAL_CPUSET"
+    else
+        if [ "$CPU_PINNING" -eq 1 ]; then
+            # 每个路由器绑定一个核（简单轮询分配）
+            CORE_ID=$(( (i - 1) % $(nproc) ))
+            CPUSET_OPT="--cpuset-cpus=$CORE_ID"
+        fi
     fi
     
     sudo docker run -d \
@@ -425,15 +437,20 @@ log_step "步骤 8: 分析结果"
 
 ANALYZE_SCRIPT="${SCRIPT_DIR}/analyze_bgp_logs.py"
 
-if [ -f "$ANALYZE_SCRIPT" ]; then
-    # 设置环境变量告诉分析脚本使用 wall-clock 模式
-    T0_FILE="$RESULT_DIR/meta/t0_epoch.txt" \
-    TIME_MODE=wallclock \
-    python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "$RESULT_DIR/logs" "$TOPOLOGY_MODE"
-    ANALYZE_RESULT=$?
+if [ "$SKIP_ANALYZE" -eq 1 ]; then
+    log_info "跳过 analyze_bgp_logs.py（SKIP_ANALYZE=1）"
+    ANALYZE_RESULT=0
 else
-    log_error "分析脚本不存在: $ANALYZE_SCRIPT"
-    ANALYZE_RESULT=1
+    if [ -f "$ANALYZE_SCRIPT" ]; then
+        # 设置环境变量告诉分析脚本使用 wall-clock 模式
+        T0_FILE="$RESULT_DIR/meta/t0_epoch.txt" \
+        TIME_MODE=wallclock \
+        python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "$RESULT_DIR/logs" "$TOPOLOGY_MODE"
+        ANALYZE_RESULT=$?
+    else
+        log_error "分析脚本不存在: $ANALYZE_SCRIPT"
+        ANALYZE_RESULT=1
+    fi
 fi
 
 # ============================================================

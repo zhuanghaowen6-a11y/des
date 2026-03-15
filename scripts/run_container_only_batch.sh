@@ -39,12 +39,16 @@ fi
 for i in $(seq 1 "$ITERATIONS"); do
   RUN_START="$(date +%Y-%m-%d_%H:%M:%S)"
   RUN_LOG="$BATCH_DIR/run_${START_TS}_iter${i}.log"
-  if ! CPU_PINNING=1 bash "$SINGLE_RUN" "$TEST_DURATION" "$TOPOLOGY_MODE" > "$RUN_LOG" 2>&1; then
+  if ! CPU_PINNING="$CPU_PINNING" bash "$SINGLE_RUN" "$TEST_DURATION" "$TOPOLOGY_MODE" > "$RUN_LOG" 2>&1; then
     echo "[WARN] single-run failed for iter ${i}, see $RUN_LOG" >&2
   fi
   RESULT_DIR="$(awk -F': ' '/^(结果目录|Result Dir): /{print $2}' "$RUN_LOG" | tail -n 1)"
   if [ -z "$RESULT_DIR" ]; then
-    RESULT_DIR="$(ls -dt results/container_only/${PINNING_LABEL}/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_* 2>/dev/null | head -n 1)"
+    R_TOPO="$(awk -F': ' '/^Topology: /{print $2}' "$RUN_LOG" | tail -n 1 | tr '[:upper:]' '[:lower:]')"
+    R_NUM="$(awk -F': ' '/^Routers: /{print $2}' "$RUN_LOG" | tail -n 1)"
+    [ -z "$R_TOPO" ] && R_TOPO="$TOPOLOGY_MODE"
+    [ -z "$R_NUM" ] && R_NUM="$NUM_ROUTERS"
+    RESULT_DIR="$(ls -dt results/container_only/${PINNING_LABEL}/${R_TOPO}_n${R_NUM}_* 2>/dev/null | head -n 1)"
   fi
   if [ -z "$RESULT_DIR" ] || [ ! -d "$RESULT_DIR" ]; then
     echo "${i},${RUN_START},,," >> "$BATCH_FILE"

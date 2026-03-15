@@ -218,7 +218,7 @@ def analyze_route_convergence(log_path, router_id, topology_mode="full-mesh", st
         
         # 匹配所有路由更新事件 (包括 added, replaced, removed, withdraw 等)
         # 格式: <TRACE> rX.ipv4 > ... 或 <TRACE> rX.ipv4 < ...
-        update_match = re.search(r'<TRACE> (r\d+|static4)\.ipv4 [><] (added|replaced|removed|idempotent withdraw)', line)
+        update_match = re.search(r'<TRACE> (r\d+|static4)\.ipv4 [><] (added|replaced|removed|withdraw|idempotent withdraw)', line)
         if update_match:
             # 提取前缀
             prefix_match = re.search(r'(\d+\.\d+\.\d+\.\d+/\d+)', line)

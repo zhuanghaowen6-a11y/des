@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+import os
+import sys
+import csv
+import importlib.util
+
+
+def load_analyze_module(project_root):
+    path = os.path.join(project_root, "scripts", "analyze_bgp_logs.py")
+    spec = importlib.util.spec_from_file_location("analyze_bgp_logs", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: compute_convergence_curve.py <RESULT_DIR> <target_prefix> [topology_mode] [num_routers]")
+        print("Example: compute_convergence_curve.py results/... 192.168.41.0/24 fat-tree-k8-64 64")
+        return 2
+
+    result_dir = sys.argv[1]
+    target_prefix = sys.argv[2]
+    topology_mode = (sys.argv[3] if len(sys.argv) >= 4 else os.environ.get("TOPOLOGY_MODE") or "fat-tree-k8-64").lower()
+    num_routers = int(sys.argv[4]) if len(sys.argv) >= 5 else int(os.environ.get("NUM_ROUTERS", "64"))
+
+    log_dir = os.path.join(result_dir, "logs")
+    t_fail_file = os.path.join(result_dir, "meta", "t_fail_epoch.txt")
+
+    if not os.path.isdir(log_dir):
+        print(f"[ERROR] log dir not found: {log_dir}")
+        return 1
+    if not os.path.exists(t_fail_file):
+        print(f"[ERROR] t_fail file not found: {t_fail_file}")
+        return 1
+
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    abl = load_analyze_module(project_root)
+
+    # Use wallclock mode, and set t0 to t_fail to get relative time since fault.
+    os.environ["TIME_MODE"] = "wallclock"
+    os.environ["T0_FILE"] = t_fail_file
+    abl.TIME_MODE = "wallclock"
+    abl.T0_FILE = t_fail_file
+    abl.load_t0()
+
+    per_router = []  # (router_id, t_converged_s)
+    for rid in range(1, num_routers + 1):
+        log_path = os.path.join(log_dir, f"bird_r{rid}.log")
+        r = abl.analyze_route_convergence(log_path, rid, topology_mode=topology_mode)
+
+        times = [t for (t, p, _a) in r["route_updates"] if p == target_prefix and t >= 0.0]
+        t_i = max(times) if times else 0.0
+        per_router.append((rid, t_i))
+
+    meta_dir = os.path.join(result_dir, "meta")
+    os.makedirs(meta_dir, exist_ok=True)
+
+    out1 = os.path.join(meta_dir, "per_router_convergence.csv")
+    with open(out1, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["router_id", "t_converged_s"])
+        for rid, t in per_router:
+            w.writerow([rid, f"{t:.6f}"])
+
+    times_sorted = sorted(t for _, t in per_router)
+    n = len(times_sorted)
+    curve = [(t, (i + 1) / n) for i, t in enumerate(times_sorted)]
+
+    out2 = os.path.join(meta_dir, "convergence_curve.csv")
+    with open(out2, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["t_s", "ratio"])
+        for t, r in curve:
+            w.writerow([f"{t:.6f}", f"{r:.6f}"])
+
+    # Optional plot
+    try:
+        import matplotlib.pyplot as plt
+
+        xs = [t for t, _ in curve]
+        ys = [r for _, r in curve]
+        plt.figure(figsize=(6, 3.5))
+        plt.step(xs, ys, where="post")
+        plt.xlabel("t - t_fail (s)")
+        plt.ylabel("Converged nodes ratio")
+        plt.title(f"Convergence CDF: {target_prefix}")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        outpng = os.path.join(meta_dir, "convergence_curve.png")
+        plt.savefig(outpng, dpi=200)
+    except Exception:
+        pass
+
+    print(f"[OK] wrote {out1}")
+    print(f"[OK] wrote {out2}")
+    print("[OK] done")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
