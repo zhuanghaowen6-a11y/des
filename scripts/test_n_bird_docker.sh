@@ -558,8 +558,6 @@ else
     done
 fi
 
-# 等待所有启动命令完成
-#wait
 
 date +%s.%N > "$RESULT_DIR/meta/bird_started_epoch.txt"
 
