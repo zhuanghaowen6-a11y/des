@@ -19,6 +19,9 @@ NUM_ROUTERS=${1:-5}
 TEST_DURATION=${2:-60}
 TOPOLOGY_MODE=${TOPOLOGY_MODE:-${3:-ring}}
 TOPOLOGY_MODE=${TOPOLOGY_MODE,,}
+GLOBAL_CPUSET=${GLOBAL_CPUSET:-}
+DESD_CPUSET=${DESD_CPUSET:-}
+SKIP_ANALYZE=${SKIP_ANALYZE:-0}
 
 if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k6" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k8-64" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k4" ]; then
     echo "[ERROR] TOPOLOGY_MODE must be 'ring', 'full-mesh', 'fat-tree-k6', 'fat-tree-k8-64', or 'fat-tree-k4'"
@@ -51,6 +54,9 @@ echo "Test Duration: ${TEST_DURATION}s"
 echo "KEEP_ENV: $KEEP_ENV (1=保留环境, 0=自动清理)"
 echo "ENABLE_STRACE: $ENABLE_STRACE (1=开启strace, 0=关闭)"
 echo "TOPOLOGY_MODE: $TOPOLOGY_MODE (ring/full-mesh/fat-tree-k6/fat-tree-k8-64)"
+echo "GLOBAL_CPUSET: ${GLOBAL_CPUSET:-<none>}"
+echo "DESD_CPUSET: ${DESD_CPUSET:-<none>}"
+echo "SKIP_ANALYZE: $SKIP_ANALYZE"
 echo "=========================================="
 
 # 日志函数
@@ -125,6 +131,29 @@ else
 fi
 
 enable_core_dumps
+
+# 创建结果目录
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+if [ -n "${RESULT_DIR_OVERRIDE:-}" ]; then
+    RESULT_DIR="$RESULT_DIR_OVERRIDE"
+else
+    RESULT_DIR="results/des/${TOPOLOGY_MODE}_n${NUM_ROUTERS}_${TIMESTAMP}"
+fi
+LOG_DIR="$RESULT_DIR/logs"
+mkdir -p "$LOG_DIR" "$RESULT_DIR/configs" "$RESULT_DIR/meta"
+
+cat > "$RESULT_DIR/meta/env.txt" << EOF
+NUM_ROUTERS=$NUM_ROUTERS
+TEST_DURATION=$TEST_DURATION
+TOPOLOGY_MODE=$TOPOLOGY_MODE
+KEEP_ENV=$KEEP_ENV
+ENABLE_STRACE=$ENABLE_STRACE
+GLOBAL_CPUSET=$GLOBAL_CPUSET
+DESD_CPUSET=$DESD_CPUSET
+TIMESTAMP=$TIMESTAMP
+EOF
+
+log_info "Result Dir: $RESULT_DIR"
 
 log_step "步骤1: 编译DES项目"
 make clean && make
@@ -415,6 +444,11 @@ for i in $(seq 1 $NUM_ROUTERS); do
 
     sudo docker rm -f r$i 2>/dev/null || true
     
+    CPUSET_OPT=""
+    if [ -n "${GLOBAL_CPUSET:-}" ]; then
+        CPUSET_OPT="--cpuset-cpus=$GLOBAL_CPUSET"
+    fi
+
     sudo docker run -d \
         --name r$i \
         --hostname r$i \
@@ -425,6 +459,7 @@ for i in $(seq 1 $NUM_ROUTERS); do
         --cap-add=SYS_PTRACE \
         --security-opt seccomp=unconfined \
         --privileged \
+        $CPUSET_OPT \
         -v /tmp:/tmp \
         -v /tmp/bird_r${i}.conf:/etc/bird/bird.conf:ro \
         ${BIRD_IMAGE:-bird:latest} \
@@ -469,11 +504,14 @@ log_info "✓ 所有容器已启用 core dump（core 文件写入宿主机 /tmp�
 
 log_step "步骤7: 启动desd"
 sudo rm -f /tmp/desd_control_socket /tmp/router_socket
-mkdir -p logs
-rm -f logs/desd_n${NUM_ROUTERS}.log
+rm -f "$LOG_DIR/desd_n${NUM_ROUTERS}.log"
 
 # 启动desd，传入路由器数量
-sudo ./build/desd $NUM_ROUTERS > logs/desd_n${NUM_ROUTERS}.log 2>&1 &
+if [ -n "${DESD_CPUSET:-}" ]; then
+    sudo taskset -c "$DESD_CPUSET" ./build/desd $NUM_ROUTERS > "$LOG_DIR/desd_n${NUM_ROUTERS}.log" 2>&1 &
+else
+    sudo ./build/desd $NUM_ROUTERS > "$LOG_DIR/desd_n${NUM_ROUTERS}.log" 2>&1 &
+fi
 DESD_PID=$!
 echo $DESD_PID > /tmp/desd.pid
 log_info "desd已启动，PID: $DESD_PID，等待 $NUM_ROUTERS 个路由器"
@@ -489,7 +527,7 @@ done
 
 if ! ps -p $DESD_PID > /dev/null; then
     log_error "desd启动失败！查看日志："
-    tail -20 logs/desd_n${NUM_ROUTERS}.log
+    tail -20 "$LOG_DIR/desd_n${NUM_ROUTERS}.log"
     exit 1
 fi
 
@@ -511,40 +549,47 @@ log_info "并行启动 $NUM_ROUTERS 个BIRD进程..."
 if [ "$ENABLE_STRACE" -eq 1 ]; then
     log_info "strace 已启用，跟踪关键系统调用到 /tmp/bird_r*_strace.log"
     for i in $(seq 1 $NUM_ROUTERS); do
-        sudo docker exec -d r$i bash -c '
-            ulimit -c unlimited
-            strace -f -o /tmp/bird_r'"$i"'_strace.log \
-                -e trace=close,exit,exit_group,signal,poll,select,recvfrom,read,write,socket,connect,accept,bind,listen \
-                env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID='"$i"' DES_LOG_VT_PREFIX=1 \
-                bird -f -c /etc/bird/bird.conf > /var/log/bird_r'"$i"'.log 2>&1
-        ' &
+        sudo docker exec r$i bash -c "ulimit -c unlimited; nohup strace -f -o /tmp/bird_r${i}_strace.log -e trace=close,exit,exit_group,signal,poll,select,recvfrom,read,write,socket,connect,accept,bind,listen env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID=${i} DES_LOG_VT_PREFIX=1 bird -f -c /etc/bird/bird.conf > /var/log/bird_r${i}.log 2>&1 &"
     done
 else
     log_info "strace 已禁用，直接启动 BIRD"
     for i in $(seq 1 $NUM_ROUTERS); do
-        sudo docker exec -d r$i bash -c '
-            ulimit -c unlimited
-            env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID='"$i"' DES_LOG_VT_PREFIX=1 \
-                bird -f -c /etc/bird/bird.conf > /var/log/bird_r'"$i"'.log 2>&1
-        ' &
+        sudo docker exec r$i bash -c "ulimit -c unlimited; nohup env LD_PRELOAD=/usr/local/lib/libdeshook.so ROUTER_ID=${i} DES_LOG_VT_PREFIX=1 bird -f -c /etc/bird/bird.conf > /var/log/bird_r${i}.log 2>&1 &"
     done
 fi
 
 # 等待所有启动命令完成
-wait
+#wait
+
+date +%s.%N > "$RESULT_DIR/meta/bird_started_epoch.txt"
+
+log_step "步骤9: 等待仿真运行 (${TEST_DURATION}s wall-clock)"
+START_TS=$(date +%s)
+while true; do
+    if ! ps -p $DESD_PID > /dev/null 2>&1; then
+        log_info "desd 已退出"
+        break
+    fi
+    NOW_TS=$(date +%s)
+    ELAPSED=$((NOW_TS - START_TS))
+    if [ "$ELAPSED" -ge "$TEST_DURATION" ]; then
+        break
+    fi
+    sleep 1
+done
 
 log_step "步骤11: 收集最终日志"
 echo ""
 
 # 将容器内的 BIRD 日志复制到 logs 目录，供分析脚本使用
 for i in $(seq 1 $NUM_ROUTERS); do
-    sudo docker cp r$i:/var/log/bird_r${i}.log logs/bird_r${i}.log 2>/dev/null || true
+    sudo docker cp r$i:/var/log/bird_r${i}.log "$LOG_DIR/bird_r${i}.log" 2>/dev/null || true
     # 如果启用了 strace，也复制 strace 日志
     if [ "$ENABLE_STRACE" -eq 1 ]; then
-        sudo docker cp r$i:/tmp/bird_r${i}_strace.log logs/bird_r${i}_strace.log 2>/dev/null || true
+        sudo docker cp r$i:/tmp/bird_r${i}_strace.log "$LOG_DIR/bird_r${i}_strace.log" 2>/dev/null || true
     fi
 done
-log_info "日志已收集到 logs/ 目录"
+log_info "日志已收集到 $LOG_DIR"
 
 log_step "步骤12: 分析测试结果"
 echo ""
@@ -556,12 +601,17 @@ echo ""
 #   3. 在 DESD 退出前，是否有任何 BGP 会话被协议层主动断开
 ANALYZE_SCRIPT="${SCRIPT_DIR}/analyze_bgp_logs.py"
 
-if [ -f "$ANALYZE_SCRIPT" ]; then
-    python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "logs" "$TOPOLOGY_MODE"
-    ANALYZE_RESULT=$?
+if [ "$SKIP_ANALYZE" -eq 1 ]; then
+    log_info "跳过 analyze_bgp_logs.py（SKIP_ANALYZE=1）"
+    ANALYZE_RESULT=0
 else
-    log_error "分析脚本不存在: $ANALYZE_SCRIPT"
-    ANALYZE_RESULT=1
+    if [ -f "$ANALYZE_SCRIPT" ]; then
+        python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "$LOG_DIR" "$TOPOLOGY_MODE"
+        ANALYZE_RESULT=$?
+    else
+        log_error "分析脚本不存在: $ANALYZE_SCRIPT"
+        ANALYZE_RESULT=1
+    fi
 fi
 
 echo ""
@@ -569,8 +619,8 @@ if [ $ANALYZE_RESULT -eq 0 ]; then
     echo "🎉 测试成功！BGP 会话在整个仿真期间保持健康。"
 else
     echo "⚠️  测试发现问题，详细信息见上方分析报告"
-    echo "查看desd日志: less logs/desd_n${NUM_ROUTERS}.log"
-    echo "查看R1日志: less logs/bird_r1.log"
+    echo "查看desd日志: less $LOG_DIR/desd_n${NUM_ROUTERS}.log"
+    echo "查看R1日志: less $LOG_DIR/bird_r1.log"
 fi
 
 echo ""
