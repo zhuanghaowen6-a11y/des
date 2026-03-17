@@ -42,6 +42,7 @@ def infer_t_fail_vt(result_dir: str, tor_id: int, keep_agg_id: int):
     # Look for the first down/closed event for the target peer.
     # We prefer explicit BGP state messages.
     patterns = [
+        re.compile(rf"<INFO> Disabling protocol r{keep_agg_id}\\b"),
         re.compile(rf"<TRACE> r{keep_agg_id}: BGP session closed"),
         re.compile(rf"<TRACE> r{keep_agg_id}: State changed to down"),
         re.compile(rf"<TRACE> r{keep_agg_id}: State changed to stop"),
