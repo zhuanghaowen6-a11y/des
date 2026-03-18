@@ -1,23 +1,21 @@
 #!/bin/bash
 # Inject a ToR-Agg single-link failure during DES mode experiment (test_n_bird_docker.sh).
 #
-# This script uses wall-clock warmup (because external VT query is not exposed to the host).
-# The convergence curve script will later derive t_fail in VT from BIRD logs.
+# This script waits for BGP convergence via birdc before injecting faults.
+# The convergence curve script will derive t_fail in VT from BIRD logs.
 #
 # Usage:
-#   ./scripts/inject_fault_tor_agg_des.sh <RESULT_DIR> [TOR_ID] [KEEP_AGG_ID] [WARMUP_S] [STABILIZE_S]
+#   ./scripts/inject_fault_tor_agg_des.sh <RESULT_DIR> [TOR_ID] [KEEP_AGG_ID] [STABILIZE_S]
 # Example:
-#   ./scripts/inject_fault_tor_agg_des.sh results/eye_catcher/des/fat-tree-k8-64_tor41_... 41 17 60 10
+#   ./scripts/inject_fault_tor_agg_des.sh results/eye_catcher/des/fat-tree-k8-64_tor41_... 41 17 10
 #
 set -euo pipefail
 
 RESULT_DIR=${1:-}
 TOR_ID=${2:-41}
 KEEP_AGG_ID=${3:-17}
-WARMUP_S=${4:-60}
-STABILIZE_S=${5:-10}
+STABILIZE_S=${4:-10}
 INJECT_TIMEOUT_S=${INJECT_TIMEOUT_S:-5}
-WAIT_FOR_CONVERGENCE=${WAIT_FOR_CONVERGENCE:-0}
 CONVERGENCE_TIMEOUT_S=${CONVERGENCE_TIMEOUT_S:-300}
 CONVERGENCE_POLL_INTERVAL_S=${CONVERGENCE_POLL_INTERVAL_S:-2}
 CONVERGENCE_STABLE_ROUNDS=${CONVERGENCE_STABLE_ROUNDS:-3}
@@ -57,7 +55,7 @@ fi
 
 echo "[INFO] RESULT_DIR=$RESULT_DIR"
 echo "[INFO] TOR_ID=$TOR_ID uplinks: ${AGGS[*]} (disable ${OTHER_AGGS[*]} first)"
-echo "[INFO] warmup=${WARMUP_S}s stabilize=${STABILIZE_S}s timeout=${INJECT_TIMEOUT_S}s"
+echo "[INFO] stabilize=${STABILIZE_S}s timeout=${INJECT_TIMEOUT_S}s"
 
 # Wait until bird start marker exists (written by test_n_bird_docker.sh)
 while [ ! -f "$MARKER_FILE" ]; do
@@ -179,13 +177,8 @@ wait_for_convergence() {
   done
 }
 
-if [ "$WAIT_FOR_CONVERGENCE" -eq 1 ] || [ "$WARMUP_S" -eq 0 ]; then
-  echo "[STEP] waiting for convergence via birdc (timeout=${CONVERGENCE_TIMEOUT_S}s, stable_rounds=${CONVERGENCE_STABLE_ROUNDS})"
-  wait_for_convergence
-else
-  echo "[STEP] warmup sleep ${WARMUP_S}s"
-  sleep_with_liveness_check "$WARMUP_S"
-fi
+echo "[STEP] waiting for convergence via birdc (timeout=${CONVERGENCE_TIMEOUT_S}s, stable_rounds=${CONVERGENCE_STABLE_ROUNDS})"
+wait_for_convergence
 
 do_exec() {
   local cname=$1

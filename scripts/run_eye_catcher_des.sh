@@ -2,9 +2,9 @@
 # Orchestrate an "eye-catcher" experiment in DES mode (test_n_bird_docker.sh) and generate VT-based convergence curve.
 #
 # Usage:
-#   ./scripts/run_eye_catcher_des.sh <TEST_DURATION> <TOPOLOGY_MODE> <TOR_ID> <KEEP_AGG_ID> <TARGET_PREFIX> [WARMUP_S] [STABILIZE_S]
+#   ./scripts/run_eye_catcher_des.sh <TEST_DURATION> <TOPOLOGY_MODE> <TOR_ID> <KEEP_AGG_ID> <TARGET_PREFIX> [STABILIZE_S]
 # Example:
-#   GLOBAL_CPUSET=0-1 DESD_CPUSET=0-1 ./scripts/run_eye_catcher_des.sh 120 fat-tree-k8-64 41 17 192.168.41.0/24 20 5
+#   GLOBAL_CPUSET=0-1 DESD_CPUSET=0-1 ./scripts/run_eye_catcher_des.sh 120 fat-tree-k8-64 41 17 192.168.41.0/24 5
 #
 set -euo pipefail
 
@@ -13,8 +13,7 @@ TOPOLOGY_MODE=${2:-fat-tree-k8-64}
 TOR_ID=${3:-41}
 KEEP_AGG_ID=${4:-17}
 TARGET_PREFIX=${5:-192.168.41.0/24}
-WARMUP_S=${6:-20}
-STABILIZE_S=${7:-5}
+STABILIZE_S=${6:-5}
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}" )" && pwd)"
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -57,7 +56,7 @@ done
 
 # Inject fault
 set +e
-"$PROJECT_ROOT/scripts/inject_fault_tor_agg_des.sh" "$RESULT_DIR" "$TOR_ID" "$KEEP_AGG_ID" "$WARMUP_S" "$STABILIZE_S"
+"$PROJECT_ROOT/scripts/inject_fault_tor_agg_des.sh" "$RESULT_DIR" "$TOR_ID" "$KEEP_AGG_ID" "$STABILIZE_S"
 INJECT_RC=$?
 set -e
 
