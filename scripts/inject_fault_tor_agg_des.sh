@@ -60,7 +60,6 @@ echo "[INFO] stabilize=${STABILIZE_S}s timeout=${INJECT_TIMEOUT_S}s"
 # Wait until bird start marker exists (written by test_n_bird_docker.sh)
 while [ ! -f "$MARKER_FILE" ]; do
   sleep 0.2
-  # Allow user to ctrl-c; no extra checks here.
 done
 
 echo "[INFO] bird start marker present: $MARKER_FILE"
@@ -83,7 +82,7 @@ if [ -f "$ENV_FILE" ]; then
   set -u
 fi
 
-sleep_with_liveness_check() {
+wait_seconds_with_liveness() {
   local total_s=$1
   local step_s=1
   local elapsed=0
@@ -204,9 +203,8 @@ for agg in "${OTHER_AGGS[@]}"; do
   echo "  disabled r$TOR_ID<->r$agg"
 done
 
-sleep_with_liveness_check "$STABILIZE_S"
+wait_seconds_with_liveness "$STABILIZE_S"
 
-# Record wall-clock injection time for debugging
 TFAIL_EPOCH=$(date +%s.%N)
 echo "$TFAIL_EPOCH" > "$RESULT_DIR/meta/t_fail_epoch.txt"
 echo "[INFO] t_fail_epoch=$TFAIL_EPOCH (written to meta/t_fail_epoch.txt)"
