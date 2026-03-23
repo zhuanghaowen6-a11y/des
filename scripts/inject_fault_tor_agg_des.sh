@@ -1,25 +1,24 @@
 #!/bin/bash
 # Inject a ToR-Agg single-link failure during DES mode experiment (test_n_bird_docker.sh).
 #
-# This script waits for BGP convergence via birdc before injecting faults.
-# The convergence curve script will derive t_fail in VT from BIRD logs.
+# Scheme C: The 3 non-KEEP uplinks are already excluded at config generation time
+# (PRE_DISABLE_OTHER_UPLINKS=1), so this script only waits for convergence and then
+# disables the single KEEP link on both ends.
 #
 # Usage:
-#   ./scripts/inject_fault_tor_agg_des.sh <RESULT_DIR> [TOR_ID] [KEEP_AGG_ID] [STABILIZE_S]
+#   ./scripts/inject_fault_tor_agg_des.sh <RESULT_DIR> [TOR_ID] [KEEP_AGG_ID]
 # Example:
-#   ./scripts/inject_fault_tor_agg_des.sh results/eye_catcher/des/fat-tree-k8-64_tor41_... 41 17 10
+#   ./scripts/inject_fault_tor_agg_des.sh results/eye_catcher/des/fat-tree-k8-64_tor41_... 41 17
 #
 set -euo pipefail
 
 RESULT_DIR=${1:-}
 TOR_ID=${2:-41}
 KEEP_AGG_ID=${3:-17}
-STABILIZE_S=${4:-10}
 INJECT_TIMEOUT_S=${INJECT_TIMEOUT_S:-5}
 CONVERGENCE_TIMEOUT_S=${CONVERGENCE_TIMEOUT_S:-300}
 CONVERGENCE_POLL_INTERVAL_S=${CONVERGENCE_POLL_INTERVAL_S:-2}
 CONVERGENCE_STABLE_ROUNDS=${CONVERGENCE_STABLE_ROUNDS:-3}
-CONVERGENCE_CHECK_ALL=${CONVERGENCE_CHECK_ALL:-0}
 CONVERGENCE_CHECK_TIMEOUT_S=${CONVERGENCE_CHECK_TIMEOUT_S:-5}
 
 if [ -z "$RESULT_DIR" ]; then
@@ -29,11 +28,13 @@ fi
 
 MARKER_FILE="$RESULT_DIR/meta/bird_started_epoch.txt"
 
-# For fat-tree-k8-64, ToR uplinks are 4 Aggs in its pod.
+# Validate TOR_ID for fat-tree-k8-64
 if [ "$TOR_ID" -lt 41 ] || [ "$TOR_ID" -gt 64 ]; then
   echo "[ERROR] TOR_ID=$TOR_ID is out of range for fat-tree-k8-64 (41..64)"
   exit 1
 fi
+
+# Validate KEEP_AGG_ID is in same pod as TOR_ID
 pod=$(( (TOR_ID - 41) / 4 ))
 agg0=$((17 + pod*4 + 0))
 agg1=$((17 + pod*4 + 1))
@@ -41,21 +42,21 @@ agg2=$((17 + pod*4 + 2))
 agg3=$((17 + pod*4 + 3))
 AGGS=("$agg0" "$agg1" "$agg2" "$agg3")
 
-OTHER_AGGS=()
+is_valid_keep=0
 for a in "${AGGS[@]}"; do
-  if [ "$a" -ne "$KEEP_AGG_ID" ]; then
-    OTHER_AGGS+=("$a")
+  if [ "$a" -eq "$KEEP_AGG_ID" ]; then
+    is_valid_keep=1
+    break
   fi
 done
-
-if [ "${#OTHER_AGGS[@]}" -ne 3 ]; then
-  echo "[ERROR] KEEP_AGG_ID=$KEEP_AGG_ID must be one of uplinks: ${AGGS[*]}"
+if [ "$is_valid_keep" -ne 1 ]; then
+  echo "[ERROR] KEEP_AGG_ID=$KEEP_AGG_ID must be one of ToR $TOR_ID uplinks: ${AGGS[*]}"
   exit 1
 fi
 
 echo "[INFO] RESULT_DIR=$RESULT_DIR"
-echo "[INFO] TOR_ID=$TOR_ID uplinks: ${AGGS[*]} (disable ${OTHER_AGGS[*]} first)"
-echo "[INFO] stabilize=${STABILIZE_S}s timeout=${INJECT_TIMEOUT_S}s"
+echo "[INFO] TOR_ID=$TOR_ID KEEP_AGG_ID=$KEEP_AGG_ID (Scheme C: only this link exists)"
+echo "[INFO] inject_timeout=${INJECT_TIMEOUT_S}s"
 
 # Wait until bird start marker exists (written by test_n_bird_docker.sh)
 while [ ! -f "$MARKER_FILE" ]; do
@@ -72,33 +73,6 @@ if ! sudo docker inspect "r$KEEP_AGG_ID" >/dev/null 2>&1; then
   echo "[ERROR] container r$KEEP_AGG_ID not found (environment may have been cleaned up)"
   exit 1
 fi
-
-ENV_FILE="$RESULT_DIR/meta/env.txt"
-NUM_ROUTERS=${NUM_ROUTERS:-64}
-if [ -f "$ENV_FILE" ]; then
-  set +u
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set -u
-fi
-
-wait_seconds_with_liveness() {
-  local total_s=$1
-  local step_s=1
-  local elapsed=0
-  while [ "$elapsed" -lt "$total_s" ]; do
-    if ! sudo docker inspect "r$TOR_ID" >/dev/null 2>&1; then
-      echo "[ERROR] container r$TOR_ID not found (environment may have been cleaned up)"
-      exit 1
-    fi
-    if ! sudo docker inspect "r$KEEP_AGG_ID" >/dev/null 2>&1; then
-      echo "[ERROR] container r$KEEP_AGG_ID not found (environment may have been cleaned up)"
-      exit 1
-    fi
-    sleep "$step_s"
-    elapsed=$((elapsed + step_s))
-  done
-}
 
 birdc_show_protocols() {
   local rid=$1
@@ -128,19 +102,8 @@ wait_for_convergence() {
   start_ts=$(date +%s)
   local ok_rounds=0
 
-  local check_routers=()
-  if [ "$CONVERGENCE_CHECK_ALL" -eq 1 ]; then
-    for rid in $(seq 1 "$NUM_ROUTERS"); do
-      check_routers+=("$rid")
-    done
-  else
-    check_routers+=("$TOR_ID")
-    check_routers+=("$KEEP_AGG_ID")
-    for a in "${AGGS[@]}"; do
-      check_routers+=("$a")
-    done
-    check_routers+=("1")
-  fi
+  # Scheme C: only check the two endpoints that have the single session
+  local check_routers=("$TOR_ID" "$KEEP_AGG_ID")
 
   while true; do
     local now_ts
@@ -192,19 +155,7 @@ do_exec() {
   timeout "${INJECT_TIMEOUT_S}s" sudo docker exec "$cname" birdc disable "$peer" >/dev/null
 }
 
-echo "[STEP] Disable other uplinks on both ends: r$TOR_ID <-> r{${OTHER_AGGS[*]}}"
-for agg in "${OTHER_AGGS[@]}"; do
-  if ! sudo docker inspect "r$agg" >/dev/null 2>&1; then
-    echo "[ERROR] container r$agg not found (environment may have been cleaned up)"
-    exit 1
-  fi
-  do_exec "r$TOR_ID" "r$agg"
-  do_exec "r$agg" "r$TOR_ID"
-  echo "  disabled r$TOR_ID<->r$agg"
-done
-
-wait_seconds_with_liveness "$STABILIZE_S"
-
+# Record t_fail_epoch before injection
 TFAIL_EPOCH=$(date +%s.%N)
 echo "$TFAIL_EPOCH" > "$RESULT_DIR/meta/t_fail_epoch.txt"
 echo "[INFO] t_fail_epoch=$TFAIL_EPOCH (written to meta/t_fail_epoch.txt)"

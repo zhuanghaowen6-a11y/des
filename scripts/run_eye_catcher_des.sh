@@ -1,10 +1,14 @@
 #!/bin/bash
 # Orchestrate an "eye-catcher" experiment in DES mode (test_n_bird_docker.sh) and generate VT-based convergence curve.
 #
+# Scheme C: PRE_DISABLE_OTHER_UPLINKS=1 is passed to test_n_bird_docker.sh so that
+# ToR's non-KEEP uplinks are never created at config generation time. The injection
+# script then only needs to disable the single KEEP link after convergence.
+#
 # Usage:
-#   ./scripts/run_eye_catcher_des.sh <TEST_DURATION> <TOPOLOGY_MODE> <TOR_ID> <KEEP_AGG_ID> <TARGET_PREFIX> [STABILIZE_S]
+#   ./scripts/run_eye_catcher_des.sh <TEST_DURATION> <TOPOLOGY_MODE> <TOR_ID> <KEEP_AGG_ID> <TARGET_PREFIX>
 # Example:
-#   GLOBAL_CPUSET=0-1 DESD_CPUSET=0-1 ./scripts/run_eye_catcher_des.sh 120 fat-tree-k8-64 41 17 192.168.41.0/24 5
+#   GLOBAL_CPUSET=0-1 DESD_CPUSET=0-1 ./scripts/run_eye_catcher_des.sh 120 fat-tree-k8-64 41 17 192.168.41.0/24
 #
 set -euo pipefail
 
@@ -13,7 +17,6 @@ TOPOLOGY_MODE=${2:-fat-tree-k8-64}
 TOR_ID=${3:-41}
 KEEP_AGG_ID=${4:-17}
 TARGET_PREFIX=${5:-192.168.41.0/24}
-STABILIZE_S=${6:-5}
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}" )" && pwd)"
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -26,11 +29,13 @@ echo "[INFO] RESULT_DIR=$RESULT_DIR"
 
 # Run DES test in background.
 # SKIP_ANALYZE=1 because fault injection will make session-health checks fail by design.
+# PRE_DISABLE_OTHER_UPLINKS=1 enables Scheme C: ToR's non-KEEP uplinks are not generated.
 RESULT_DIR_OVERRIDE="$RESULT_DIR" \
 SKIP_ANALYZE=1 \
 TOPOLOGY_MODE="$TOPOLOGY_MODE" \
 TOR_ID="$TOR_ID" \
 KEEP_AGG_ID="$KEEP_AGG_ID" \
+PRE_DISABLE_OTHER_UPLINKS=1 \
 "$PROJECT_ROOT/scripts/test_n_bird_docker.sh" 64 "$TEST_DURATION" "$TOPOLOGY_MODE" &
 RUN_PID=$!
 
@@ -54,9 +59,9 @@ while [ ! -f "$MARKER_FILE" ]; do
   fi
 done
 
-# Inject fault
+# Inject fault (Scheme C: only disables KEEP link, no stabilize needed)
 set +e
-"$PROJECT_ROOT/scripts/inject_fault_tor_agg_des.sh" "$RESULT_DIR" "$TOR_ID" "$KEEP_AGG_ID" "$STABILIZE_S"
+"$PROJECT_ROOT/scripts/inject_fault_tor_agg_des.sh" "$RESULT_DIR" "$TOR_ID" "$KEEP_AGG_ID"
 INJECT_RC=$?
 set -e
 
