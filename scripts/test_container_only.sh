@@ -26,10 +26,45 @@ GLOBAL_CPUSET=${GLOBAL_CPUSET:-}
 BIRD_IMAGE=${BIRD_IMAGE:-bird:latest}
 KEEP_ENV=${KEEP_ENV:-0}
 SKIP_ANALYZE=${SKIP_ANALYZE:-0}
+PRE_DISABLE_OTHER_UPLINKS=${PRE_DISABLE_OTHER_UPLINKS:-0}
+TOR_ID=${TOR_ID:-}
+KEEP_AGG_ID=${KEEP_AGG_ID:-}
 
 if [ "$TOPOLOGY_MODE" != "ring" ] && [ "$TOPOLOGY_MODE" != "full-mesh" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k6" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k8-64" ] && [ "$TOPOLOGY_MODE" != "fat-tree-k4" ]; then
     echo "[ERROR] TOPOLOGY_MODE must be 'ring', 'full-mesh', 'fat-tree-k6', 'fat-tree-k8-64', or 'fat-tree-k4'"
     exit 1
+fi
+
+if [ "$PRE_DISABLE_OTHER_UPLINKS" -eq 1 ]; then
+    if [ "$TOPOLOGY_MODE" != "fat-tree-k8-64" ]; then
+        echo "[ERROR] PRE_DISABLE_OTHER_UPLINKS=1 only supported for fat-tree-k8-64"
+        exit 1
+    fi
+    if [ -z "$TOR_ID" ] || [ -z "$KEEP_AGG_ID" ]; then
+        echo "[ERROR] PRE_DISABLE_OTHER_UPLINKS=1 requires TOR_ID and KEEP_AGG_ID"
+        exit 1
+    fi
+    if [ "$TOR_ID" -lt 41 ] || [ "$TOR_ID" -gt 64 ]; then
+        echo "[ERROR] TOR_ID=$TOR_ID out of range for fat-tree-k8-64 (41..64)"
+        exit 1
+    fi
+    _pod=$(( (TOR_ID - 41) / 4 ))
+    _agg0=$((17 + _pod * 4 + 0))
+    _agg1=$((17 + _pod * 4 + 1))
+    _agg2=$((17 + _pod * 4 + 2))
+    _agg3=$((17 + _pod * 4 + 3))
+    if [ "$KEEP_AGG_ID" -ne "$_agg0" ] && [ "$KEEP_AGG_ID" -ne "$_agg1" ] && \
+       [ "$KEEP_AGG_ID" -ne "$_agg2" ] && [ "$KEEP_AGG_ID" -ne "$_agg3" ]; then
+        echo "[ERROR] KEEP_AGG_ID=$KEEP_AGG_ID is not an uplink of TOR_ID=$TOR_ID (uplinks: $_agg0 $_agg1 $_agg2 $_agg3)"
+        exit 1
+    fi
+    SKIP_TOR_AGG_PEERS=""
+    for _a in $_agg0 $_agg1 $_agg2 $_agg3; do
+        if [ "$_a" -ne "$KEEP_AGG_ID" ]; then
+            SKIP_TOR_AGG_PEERS="$SKIP_TOR_AGG_PEERS $_a"
+        fi
+    done
+    echo "[INFO] PRE_DISABLE mode: ToR $TOR_ID will only peer with Agg $KEEP_AGG_ID (skipping:$SKIP_TOR_AGG_PEERS)"
 fi
 
 # 根据拓扑确定路由器数量
@@ -67,6 +102,10 @@ echo "Topology: $TOPOLOGY_MODE"
 echo "CPU Pinning: $CPU_PINNING"
 echo "Global CPUSet: ${GLOBAL_CPUSET:-<none>}"
 echo "BIRD Image: $BIRD_IMAGE"
+echo "PRE_DISABLE_OTHER_UPLINKS: $PRE_DISABLE_OTHER_UPLINKS"
+if [ "$PRE_DISABLE_OTHER_UPLINKS" -eq 1 ]; then
+    echo "  TOR_ID: $TOR_ID, KEEP_AGG_ID: $KEEP_AGG_ID"
+fi
 echo "Result Dir: $RESULT_DIR"
 echo "=========================================="
 
@@ -208,6 +247,31 @@ is_tor_router() {
     fi
 }
 
+SKIP_PEER_SET=""
+if [ "$PRE_DISABLE_OTHER_UPLINKS" -eq 1 ] && [ "$TOPOLOGY_MODE" = "fat-tree-k8-64" ]; then
+    _TOR_ID=${TOR_ID:-41}
+    _KEEP_AGG=${KEEP_AGG_ID:-17}
+    _pod=$(( (_TOR_ID - 41) / 4 ))
+    _agg0=$((17 + _pod * 4 + 0))
+    _agg1=$((17 + _pod * 4 + 1))
+    _agg2=$((17 + _pod * 4 + 2))
+    _agg3=$((17 + _pod * 4 + 3))
+    for _a in $_agg0 $_agg1 $_agg2 $_agg3; do
+        if [ "$_a" -ne "$_KEEP_AGG" ]; then
+            SKIP_PEER_SET="$SKIP_PEER_SET ${_TOR_ID}:${_a} ${_a}:${_TOR_ID}"
+        fi
+    done
+fi
+
+should_skip_peer() {
+    local src=$1
+    local dst=$2
+    case " $SKIP_PEER_SET " in
+        *" ${src}:${dst} "*) return 0 ;;
+    esac
+    return 1
+}
+
 # ============================================================
 # 步骤 1: 记录元数据
 # ============================================================
@@ -221,6 +285,9 @@ TEST_DURATION=$TEST_DURATION
 CPU_PINNING=$CPU_PINNING
 GLOBAL_CPUSET=$GLOBAL_CPUSET
 BIRD_IMAGE=$BIRD_IMAGE
+PRE_DISABLE_OTHER_UPLINKS=$PRE_DISABLE_OTHER_UPLINKS
+TOR_ID=$TOR_ID
+KEEP_AGG_ID=$KEEP_AGG_ID
 TIMESTAMP=$TIMESTAMP
 EOF
 
@@ -309,6 +376,10 @@ EOF
 
     for j in $NEIGHBORS; do
         if [ $i -ne $j ]; then
+            if should_skip_peer $i $j; then
+                log_info "PRE_DISABLE: skipping protocol bgp r$j in R$i config"
+                continue
+            fi
             PEER_IP="10.0.$j.$j"
             PEER_AS=$((65000 + j))
             cat >> /tmp/bird_r${i}.conf << EOF

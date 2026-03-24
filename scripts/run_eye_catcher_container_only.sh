@@ -18,9 +18,8 @@ set -euo pipefail
 TEST_DURATION=${1:-180}
 TOPOLOGY_MODE=${2:-fat-tree-k8-64}
 TOR_ID=${3:-41}
-TARGET_PREFIX=${4:-192.168.41.0/24}
-WARMUP_S=${5:-60}
-STABILIZE_S=${6:-10}
+KEEP_AGG_ID=${4:-17}
+TARGET_PREFIX=${5:-192.168.41.0/24}
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -37,6 +36,9 @@ echo "[INFO] RESULT_DIR=$RESULT_DIR"
 RESULT_DIR_OVERRIDE="$RESULT_DIR" \
 SKIP_ANALYZE=1 \
 TOPOLOGY_MODE="$TOPOLOGY_MODE" \
+TOR_ID="$TOR_ID" \
+KEEP_AGG_ID="$KEEP_AGG_ID" \
+PRE_DISABLE_OTHER_UPLINKS=1 \
 "$PROJECT_ROOT/scripts/test_container_only.sh" "$TEST_DURATION" "$TOPOLOGY_MODE" &
 RUN_PID=$!
 
@@ -54,9 +56,18 @@ while [ ! -f "$T0_FILE" ]; do
   fi
 done
 
-# Inject fault (keep agg is derived inside the script; we pass KEEP_AGG_ID explicitly as 17 by default)
-KEEP_AGG_ID=${KEEP_AGG_ID:-17}
-"$PROJECT_ROOT/scripts/inject_fault_tor_agg.sh" "$RESULT_DIR" "$TOR_ID" "$KEEP_AGG_ID" "$WARMUP_S" "$STABILIZE_S"
+# Inject fault
+set +e
+"$PROJECT_ROOT/scripts/inject_fault_tor_agg.sh" "$RESULT_DIR" "$TOR_ID" "$KEEP_AGG_ID"
+INJECT_RC=$?
+set -e
+
+if [ "$INJECT_RC" -ne 0 ]; then
+  echo "[ERROR] fault injection failed (rc=$INJECT_RC). Terminating container-only run..."
+  kill "$RUN_PID" 2>/dev/null || true
+  wait "$RUN_PID" || true
+  exit "$INJECT_RC"
+fi
 
 # Wait for main run to finish (collect logs)
 wait "$RUN_PID"

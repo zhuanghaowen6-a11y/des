@@ -15,8 +15,11 @@ set -euo pipefail
 RESULT_DIR=${1:-}
 TOR_ID=${2:-41}
 KEEP_AGG_ID=${3:-17}
-WARMUP_S=${4:-60}
-STABILIZE_S=${5:-10}
+INJECT_TIMEOUT_S=${INJECT_TIMEOUT_S:-5}
+CONVERGENCE_TIMEOUT_S=${CONVERGENCE_TIMEOUT_S:-300}
+CONVERGENCE_POLL_INTERVAL_S=${CONVERGENCE_POLL_INTERVAL_S:-2}
+CONVERGENCE_STABLE_ROUNDS=${CONVERGENCE_STABLE_ROUNDS:-10}
+CONVERGENCE_CHECK_TIMEOUT_S=${CONVERGENCE_CHECK_TIMEOUT_S:-5}
 
 if [ -z "$RESULT_DIR" ]; then
   echo "[ERROR] RESULT_DIR is required"
@@ -34,9 +37,6 @@ fi
 
 mkdir -p "$RESULT_DIR/meta"
 
-# For fat-tree-k8-64, ToR uplinks are 4 Aggs in its pod.
-# We compute them deterministically from IDs:
-# ToR range: 41..64, pod = (tor-41)//4, aggs: 17 + pod*4 + {0..3}
 if [ "$TOR_ID" -lt 41 ] || [ "$TOR_ID" -gt 64 ]; then
   echo "[ERROR] TOR_ID=$TOR_ID is out of range for fat-tree-k8-64 (41..64)"
   exit 1
@@ -61,42 +61,105 @@ if [ "${#OTHER_AGGS[@]}" -ne 3 ]; then
   exit 1
 fi
 
-T0_EPOCH=$(cat "$T0_FILE")
-
 echo "[INFO] RESULT_DIR=$RESULT_DIR"
-echo "[INFO] t0=$T0_EPOCH"
-echo "[INFO] Will warm up ${WARMUP_S}s, then restrict uplinks to KEEP_AGG_ID=$KEEP_AGG_ID, then inject failure."
-echo "[INFO] TOR_ID=$TOR_ID uplinks: ${AGGS[*]} (disable ${OTHER_AGGS[*]} first)"
+echo "[INFO] TOR_ID=$TOR_ID KEEP_AGG_ID=$KEEP_AGG_ID (Scheme C: only this link exists)"
+echo "[INFO] inject_timeout=${INJECT_TIMEOUT_S}s"
 
-# Wait until wallclock >= t0 + WARMUP_S
-TARGET=$(python3 -c 'import sys; print(float(sys.argv[1]) + float(sys.argv[2]))' "$T0_EPOCH" "$WARMUP_S")
+if ! sudo docker inspect "r$TOR_ID" >/dev/null 2>&1; then
+  echo "[ERROR] container r$TOR_ID not found (environment may have been cleaned up)"
+  exit 1
+fi
+if ! sudo docker inspect "r$KEEP_AGG_ID" >/dev/null 2>&1; then
+  echo "[ERROR] container r$KEEP_AGG_ID not found (environment may have been cleaned up)"
+  exit 1
+fi
 
-while true; do
-  now=$(date +%s.%N)
-  ok=$(python3 -c 'import sys; print(1 if float(sys.argv[1]) >= float(sys.argv[2]) else 0)' "$now" "$TARGET")
-  if [ "$ok" -eq 1 ]; then
-    break
+birdc_show_protocols() {
+  local rid=$1
+  timeout "${CONVERGENCE_CHECK_TIMEOUT_S}s" sudo docker exec "r${rid}" birdc show protocols 2>/dev/null
+}
+
+router_bgp_established() {
+  local rid=$1
+  local out
+  out=$(birdc_show_protocols "$rid" || true)
+  if [ -z "$out" ]; then
+    return 1
   fi
-  sleep 0.05
-done
+  local bgp_lines
+  bgp_lines=$(echo "$out" | awk 'NF >= 2 && $2 == "BGP" {print $0}')
+  if [ -z "$bgp_lines" ]; then
+    return 1
+  fi
+  if echo "$bgp_lines" | grep -vq "Established"; then
+    return 1
+  fi
+  return 0
+}
 
-echo "[STEP] Disable other uplinks on both ends: TOR r$TOR_ID <-> Agg r{${OTHER_AGGS[*]}}"
-for agg in "${OTHER_AGGS[@]}"; do
-  sudo docker exec "r$TOR_ID" birdc disable "r$agg" >/dev/null
-  sudo docker exec "r$agg" birdc disable "r$TOR_ID" >/dev/null
-  echo "  disabled r$TOR_ID<->r$agg"
-done
+wait_for_convergence() {
+  local start_ts
+  start_ts=$(date +%s)
+  local ok_rounds=0
+  local check_routers=("$TOR_ID" "$KEEP_AGG_ID")
 
-sleep "$STABILIZE_S"
+  while true; do
+    local now_ts
+    now_ts=$(date +%s)
+    if [ $((now_ts - start_ts)) -ge "$CONVERGENCE_TIMEOUT_S" ]; then
+      echo "[ERROR] convergence wait timed out after ${CONVERGENCE_TIMEOUT_S}s"
+      return 1
+    fi
 
-# Record t_fail (epoch seconds)
-TFAIL=$(date +%s.%N)
-echo "$TFAIL" > "$TFAIL_FILE"
-echo "[INFO] t_fail=$TFAIL (written to $TFAIL_FILE)"
+    local all_ok=1
+    for rid in "${check_routers[@]}"; do
+      if ! sudo docker inspect "r$rid" >/dev/null 2>&1; then
+        echo "[ERROR] container r$rid not found (environment may have been cleaned up)"
+        return 1
+      fi
+      if ! router_bgp_established "$rid"; then
+        all_ok=0
+        break
+      fi
+    done
+
+    if [ "$all_ok" -eq 1 ]; then
+      ok_rounds=$((ok_rounds + 1))
+      echo "[INFO] convergence check ok (${ok_rounds}/${CONVERGENCE_STABLE_ROUNDS})"
+      if [ "$ok_rounds" -ge "$CONVERGENCE_STABLE_ROUNDS" ]; then
+        return 0
+      fi
+    else
+      ok_rounds=0
+    fi
+
+    sleep "${CONVERGENCE_POLL_INTERVAL_S}"
+  done
+}
+
+echo "[STEP] waiting for convergence via birdc (timeout=${CONVERGENCE_TIMEOUT_S}s, stable_rounds=${CONVERGENCE_STABLE_ROUNDS})"
+wait_for_convergence
+
+do_exec() {
+  local cname=$1
+  local peer=$2
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "[ERROR] host-side 'timeout' command not found; refusing to run potentially blocking birdc" 1>&2
+    exit 127
+  fi
+  local ts
+  ts=$(date +%s.%N)
+  echo "[INJECT] ts=${ts} exec: ${cname} birdc disable ${peer}"
+  timeout "${INJECT_TIMEOUT_S}s" sudo docker exec "$cname" birdc disable "$peer" >/dev/null
+}
+
+TFAIL_EPOCH=$(date +%s.%N)
+echo "$TFAIL_EPOCH" > "$TFAIL_FILE"
+echo "[INFO] t_fail_epoch=$TFAIL_EPOCH (written to $TFAIL_FILE)"
 
 echo "[STEP] Inject single-link failure on both ends: r$TOR_ID <-> r$KEEP_AGG_ID"
-sudo docker exec "r$TOR_ID" birdc disable "r$KEEP_AGG_ID" >/dev/null
-sudo docker exec "r$KEEP_AGG_ID" birdc disable "r$TOR_ID" >/dev/null
+do_exec "r$TOR_ID" "r$KEEP_AGG_ID"
+do_exec "r$KEEP_AGG_ID" "r$TOR_ID"
 echo "  disabled r$TOR_ID<->r$KEEP_AGG_ID"
 
 echo "[DONE] Fault injected. Wait for test_container_only.sh to finish collecting logs."
