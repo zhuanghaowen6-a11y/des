@@ -11,6 +11,7 @@
 #include <jansson.h> // For JSON parsing
 #include <poll.h> // For poll() function
 #include <stdint.h> // For uintptr_t
+#include <ctype.h>
 
 // --- Global DESD State ---
 // 事件队列的访问需要互斥锁保护，因为 registration_thread 和主事件循环会并发访问
@@ -163,6 +164,148 @@ static unsigned long next_connection_id = 1;
 
 static unsigned long generate_connection_id() {
     return next_connection_id++;
+}
+
+typedef struct {
+    double packet_send_enqueue_delay;
+    double connection_delay;
+    double connection_client_lead;
+    double packet_transmission_delay;
+} DesTimingConfig;
+
+static DesTimingConfig des_timing_config = {
+    .packet_send_enqueue_delay = 0.0002,
+    .connection_delay = 0.0005,
+    .connection_client_lead = 0.0001,
+    .packet_transmission_delay = 0.002
+};
+
+static void trim_in_place(char *s) {
+    char *start = s;
+    while (*start && isspace((unsigned char)*start)) {
+        start++;
+    }
+    if (start != s) {
+        memmove(s, start, strlen(start) + 1);
+    }
+
+    size_t len = strlen(s);
+    while (len > 0 && isspace((unsigned char)s[len - 1])) {
+        s[len - 1] = '\0';
+        len--;
+    }
+}
+
+static void set_des_timing_value(const char *key, double value) {
+    if (strcmp(key, "packet_send_enqueue_delay") == 0) {
+        des_timing_config.packet_send_enqueue_delay = value;
+    } else if (strcmp(key, "connection_delay") == 0) {
+        des_timing_config.connection_delay = value;
+    } else if (strcmp(key, "connection_client_lead") == 0) {
+        des_timing_config.connection_client_lead = value;
+    } else if (strcmp(key, "packet_transmission_delay") == 0) {
+        des_timing_config.packet_transmission_delay = value;
+    } else {
+        fprintf(stderr, "[DESD-CONFIG] Unknown delay key: %s\n", key);
+    }
+}
+
+static void load_des_timing_config_file(const char *path) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        printf("[DESD-CONFIG] Delay config file not found: %s. Using built-in defaults.\n", path);
+        return;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        char *comment = strchr(line, '#');
+        if (comment) {
+            *comment = '\0';
+        }
+
+        trim_in_place(line);
+        if (line[0] == '\0') {
+            continue;
+        }
+
+        char *eq = strchr(line, '=');
+        if (!eq) {
+            fprintf(stderr, "[DESD-CONFIG] Invalid config line: %s\n", line);
+            continue;
+        }
+
+        *eq = '\0';
+        char *key = line;
+        char *value_str = eq + 1;
+        trim_in_place(key);
+        trim_in_place(value_str);
+
+        errno = 0;
+        char *endptr = NULL;
+        double value = strtod(value_str, &endptr);
+        while (endptr && *endptr && isspace((unsigned char)*endptr)) {
+            endptr++;
+        }
+
+        if (errno != 0 || endptr == value_str || (endptr && *endptr != '\0') || value < 0.0) {
+            fprintf(stderr, "[DESD-CONFIG] Invalid numeric value for %s: %s\n", key, value_str);
+            continue;
+        }
+
+        set_des_timing_value(key, value);
+    }
+
+    fclose(fp);
+}
+
+static void apply_des_timing_env_override(const char *env_name, double *target) {
+    const char *value_str = getenv(env_name);
+    if (!value_str || value_str[0] == '\0') {
+        return;
+    }
+
+    errno = 0;
+    char *endptr = NULL;
+    double value = strtod(value_str, &endptr);
+    while (endptr && *endptr && isspace((unsigned char)*endptr)) {
+        endptr++;
+    }
+
+    if (errno != 0 || endptr == value_str || (endptr && *endptr != '\0') || value < 0.0) {
+        fprintf(stderr, "[DESD-CONFIG] Invalid env override %s=%s\n", env_name, value_str);
+        return;
+    }
+
+    *target = value;
+}
+
+static double get_client_connection_event_time(double connection_established_time) {
+    double client_event_time = connection_established_time - des_timing_config.connection_client_lead;
+    if (client_event_time < current_virtual_time) {
+        client_event_time = current_virtual_time;
+    }
+    return client_event_time;
+}
+
+static void load_des_timing_config(void) {
+    const char *config_path = getenv("DESD_DELAY_CONFIG");
+    if (!config_path || config_path[0] == '\0') {
+        config_path = "desd_delays.conf";
+    }
+
+    load_des_timing_config_file(config_path);
+
+    apply_des_timing_env_override("DESD_PACKET_SEND_ENQUEUE_DELAY", &des_timing_config.packet_send_enqueue_delay);
+    apply_des_timing_env_override("DESD_CONNECTION_DELAY", &des_timing_config.connection_delay);
+    apply_des_timing_env_override("DESD_CONNECTION_CLIENT_LEAD", &des_timing_config.connection_client_lead);
+    apply_des_timing_env_override("DESD_PACKET_TRANSMISSION_DELAY", &des_timing_config.packet_transmission_delay);
+
+    printf("[DESD-CONFIG] packet_send_enqueue_delay=%.6f, connection_delay=%.6f, connection_client_lead=%.6f, packet_transmission_delay=%.6f\n",
+           des_timing_config.packet_send_enqueue_delay,
+           des_timing_config.connection_delay,
+           des_timing_config.connection_client_lead,
+           des_timing_config.packet_transmission_delay);
 }
 
 // === 最近关闭连接表：用于跟踪"client 先关闭"的情况 ===
@@ -701,6 +844,7 @@ int main(int argc, char *argv[]) {
             exit(1);
         }
     }
+    load_des_timing_config();
     printf("[DESD] Starting daemon, expecting %d router(s) to connect.\n", expected_routers);
     
     // Setup control socket for initial connections
@@ -1569,7 +1713,7 @@ void drain_all_messages_nonblocking() {
                     // 仍然处理以避免线程死锁
                     double event_timestamp = current_virtual_time;
                     if (msg.event_type == PACKET_SEND_EVENT) {
-                        event_timestamp = current_virtual_time + 0.002;
+                        event_timestamp = current_virtual_time + des_timing_config.packet_send_enqueue_delay;
                     }
                     
                     Event new_event = {
@@ -1880,7 +2024,7 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
             // 其他阻塞类请求（PACKET_SEND, CONNECT_REQUEST 等）
             double event_timestamp = current_virtual_time;
             if (msg.event_type == PACKET_SEND_EVENT) {
-                event_timestamp = current_virtual_time + 0.002;
+                event_timestamp = current_virtual_time + des_timing_config.packet_send_enqueue_delay;
             }
             
             Event next_event = {
@@ -2366,7 +2510,7 @@ void handle_connect_request_event(Event event) {
         ti->blocked_on_function[63] = '\0';
 
         //TODO:测试建立延迟影响
-        double connection_delay = 0.005; // 50ms 连接建立延迟
+        double connection_delay = des_timing_config.connection_delay; // 50ms 连接建立延迟
         double connection_established_time = current_virtual_time + connection_delay;
 
         // 使用监听地址查找目标路由器
@@ -2441,8 +2585,10 @@ void handle_connect_request_event(Event event) {
         char *source_payload_str = json_dumps(source_payload_obj, JSON_COMPACT);
         json_decref(source_payload_obj);
 
+        double source_connection_event_time = get_client_connection_event_time(connection_established_time);
+
         Event source_conn_est_event = {
-            .timestamp = connection_established_time - 0.001, // 客户端事件早 1ms，确保先执行 connect
+            .timestamp = source_connection_event_time, // 客户端事件早 1ms，确保先执行 connect
             .router_id = router_id,
             .thread_id = event.thread_id,
             .event_type = CONNECTION_ESTABLISHED_EVENT,
@@ -3916,7 +4062,7 @@ void handle_packet_send_event(Event event) {
     }
 
     //TODO:测试延迟时间影响
-    double transmission_delay = 0.02; // 0.1s (100ms) - 数据包传输延迟
+    double transmission_delay = des_timing_config.packet_transmission_delay; // 0.1s (100ms) - 数据包传输延迟
     double receive_time = current_virtual_time + transmission_delay;
 
     // 使用连接表查找目标路由器
