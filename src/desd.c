@@ -308,6 +308,32 @@ static void load_des_timing_config(void) {
            des_timing_config.packet_transmission_delay);
 }
 
+// ============================================================================
+// CPU 时间采集：从 payload 中提取 cpu_time_since_resume_ns 并转换为秒
+// ============================================================================
+// 返回 CPU 时间（秒），如果 payload 中没有该字段则返回 0
+static double extract_cpu_time_from_payload(const Payload *payload) {
+    if (!payload || payload->json_str[0] == '\0') {
+        return 0.0;
+    }
+    
+    json_error_t json_err;
+    json_t *payload_json = json_loads(payload->json_str, 0, &json_err);
+    if (!payload_json) {
+        return 0.0;
+    }
+    
+    double cpu_time_sec = 0.0;
+    json_t *cpu_time_json = json_object_get(payload_json, "cpu_time_since_resume_ns");
+    if (cpu_time_json && json_is_integer(cpu_time_json)) {
+        long long cpu_time_ns = json_integer_value(cpu_time_json);
+        cpu_time_sec = (double)cpu_time_ns / 1000000000.0;  // 纳秒转秒
+    }
+    
+    json_decref(payload_json);
+    return cpu_time_sec;
+}
+
 // === 最近关闭连接表：用于跟踪"client 先关闭"的情况 ===
 // 当 client 在 server 完成 CONNECTION_INFO 前就 close 时，server 侧需要知道这件事
 #define MAX_RECENT_CLOSED_CONNS 512
@@ -1689,8 +1715,10 @@ void drain_all_messages_nonblocking() {
                             router_id, thread_id, msg.request_id, thread_status, current_virtual_time);
                     
                     // 仍然处理以避免线程死锁
+                    // 提取 CPU 时间并加到事件时间戳
+                    double cpu_time_sec = extract_cpu_time_from_payload(&msg.payload);
                     Event block_event = {
-                        .timestamp = current_virtual_time,
+                        .timestamp = current_virtual_time + cpu_time_sec,
                         .router_id = router_id,
                         .thread_id = thread_id,
                         .event_type = msg.event_type,
@@ -1701,8 +1729,8 @@ void drain_all_messages_nonblocking() {
                     
                     const char* status_desc = (thread_status == RUNNING) ? "was RUNNING" :
                                              (thread_status == IDLE) ? "was IDLE" : "unknown status";
-                    printf("[DESD-DRAIN] R%d T%d (%s) sent ROUTER_BLOCK_REQUEST (ReqID: %s), queued at VT=%.3f (EventID: %lu). Status NOT changed.\n",
-                           router_id, thread_id, status_desc, msg.request_id, current_virtual_time, block_event.event_id);
+                    printf("[DESD-DRAIN] R%d T%d (%s) sent ROUTER_BLOCK_REQUEST (ReqID: %s), queued at VT=%.3f (cpu_time=%.6f, EventID: %lu). Status NOT changed.\n",
+                           router_id, thread_id, status_desc, msg.request_id, block_event.timestamp, cpu_time_sec, block_event.event_id);
                     
                 } else if (msg.event_type == PACKET_SEND_EVENT ||
                            msg.event_type == CONNECT_REQUEST_EVENT) {
@@ -1711,9 +1739,11 @@ void drain_all_messages_nonblocking() {
                             router_id, thread_id, event_type_to_string(msg.event_type), msg.request_id, thread_status, current_virtual_time);
                     
                     // 仍然处理以避免线程死锁
-                    double event_timestamp = current_virtual_time;
+                    // 提取 CPU 时间并加到事件时间戳
+                    double cpu_time_sec = extract_cpu_time_from_payload(&msg.payload);
+                    double event_timestamp = current_virtual_time + cpu_time_sec;
                     if (msg.event_type == PACKET_SEND_EVENT) {
-                        event_timestamp = current_virtual_time + des_timing_config.packet_send_enqueue_delay;
+                        event_timestamp += des_timing_config.packet_send_enqueue_delay;
                     }
                     
                     Event new_event = {
@@ -1738,9 +1768,9 @@ void drain_all_messages_nonblocking() {
                     
                     const char* status_desc = (thread_status == RUNNING) ? "was RUNNING" :
                                              (thread_status == IDLE) ? "was IDLE" : "unknown status";
-                    printf("[DESD-DRAIN] R%d T%d (%s) sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f (EventID: %lu).\n",
+                    printf("[DESD-DRAIN] R%d T%d (%s) sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f (cpu_time=%.6f, EventID: %lu).\n",
                            router_id, thread_id, status_desc, event_type_to_string(msg.event_type),
-                           msg.request_id, event_timestamp, new_event.event_id);
+                           msg.request_id, event_timestamp, cpu_time_sec, new_event.event_id);
                     
                 } else if (msg.event_type == LISTEN_EVENT ||
                            msg.event_type == CONNECTION_INFO_EVENT ||
@@ -2004,8 +2034,10 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
             // 原因：handle_router_block_request 会根据是否有 ready fd/pending packet 等
             // 决定是"立即唤醒"（status 保持 RUNNING）还是"真正阻塞"（status 改为 BLOCKED）。
             if (msg.event_type == ROUTER_BLOCK_REQUEST) {
+                // 提取 CPU 时间并加到事件时间戳
+                double cpu_time_sec = extract_cpu_time_from_payload(&msg.payload);
                 Event block_event = {
-                    .timestamp = current_virtual_time,
+                    .timestamp = current_virtual_time + cpu_time_sec,
                     .router_id = router_id,
                     .thread_id = thread_id,
                     .event_type = msg.event_type,
@@ -2014,17 +2046,19 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
                 };
                 push_event(block_event);
                 
-                printf("[DESD-INTERACT] R%d T%d sent ROUTER_BLOCK_REQUEST (ReqID: %s), queued at VT=%.3f (EventID: %lu). Status NOT changed. Returning to main loop.\n",
-                       router_id, thread_id, msg.request_id, current_virtual_time, block_event.event_id);
+                printf("[DESD-INTERACT] R%d T%d sent ROUTER_BLOCK_REQUEST (ReqID: %s), queued at VT=%.3f (cpu_time=%.6f, EventID: %lu). Status NOT changed. Returning to main loop.\n",
+                       router_id, thread_id, msg.request_id, block_event.timestamp, cpu_time_sec, block_event.event_id);
                 
                 // 返回主循环处理入队的事件
                 return;
             }
             
             // 其他阻塞类请求（PACKET_SEND, CONNECT_REQUEST 等）
-            double event_timestamp = current_virtual_time;
+            // 提取 CPU 时间并加到事件时间戳
+            double cpu_time_sec = extract_cpu_time_from_payload(&msg.payload);
+            double event_timestamp = current_virtual_time + cpu_time_sec;
             if (msg.event_type == PACKET_SEND_EVENT) {
-                event_timestamp = current_virtual_time + des_timing_config.packet_send_enqueue_delay;
+                event_timestamp += des_timing_config.packet_send_enqueue_delay;
             }
             
             Event next_event = {
@@ -2047,9 +2081,9 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
             }
             pthread_mutex_unlock(&router_states_mutex);
             
-            printf("[DESD-INTERACT] R%d T%d sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f. Returning to main loop.\n",
+            printf("[DESD-INTERACT] R%d T%d sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f (cpu_time=%.6f). Returning to main loop.\n",
                    router_id, thread_id, event_type_to_string(msg.event_type),
-                   msg.request_id, event_timestamp);
+                   msg.request_id, event_timestamp, cpu_time_sec);
             
             // 返回主循环处理入队的事件
             return;

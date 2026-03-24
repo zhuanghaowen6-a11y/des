@@ -75,6 +75,10 @@ typedef struct {
     // 按行拆包缓冲区：解决 DESD→HOOK 方向的粘包/半包问题
     char recv_buf[DESD_RECV_BUF_SIZE];  // 接收缓冲区
     size_t recv_len;                     // 缓冲区中有效字节数
+    // CPU 时间采集字段：测量线程从 DES 唤醒到下一次回到 DES 之间的 CPU 执行时间
+    int cpu_window_active;              // 当前是否正在统计 CPU 时间窗口
+    struct timespec cpu_resume_clock;   // 上次 resume 时的 CLOCK_THREAD_CPUTIME_ID
+    long long cpu_time_since_resume_ns; // 计算出的 CPU 时间（纳秒）
 } ThreadState;
 
 static pthread_key_t thread_state_key;      // TLS key for per-thread state
@@ -179,6 +183,10 @@ static ThreadState* get_thread_state(void) {
         state->registration_in_progress = 0;
         // 初始化接收缓冲区（calloc 已清零，这里显式设置 recv_len）
         state->recv_len = 0;
+        // 初始化 CPU 时间采集字段
+        state->cpu_window_active = 0;
+        memset(&state->cpu_resume_clock, 0, sizeof(state->cpu_resume_clock));
+        state->cpu_time_since_resume_ns = 0;
         
         // Assign a unique thread_id within this router
         pthread_mutex_lock(&thread_id_mutex);
@@ -188,6 +196,47 @@ static ThreadState* get_thread_state(void) {
         pthread_setspecific(thread_state_key, state);
     }
     return state;
+}
+
+// ============================================================================
+// CPU 时间采集辅助函数
+// ============================================================================
+
+// 开始 CPU 时间计时窗口（在线程被 DES 解除阻塞后调用）
+static void cpu_time_window_start(ThreadState *state) {
+    if (!state) return;
+    // 使用 CLOCK_THREAD_CPUTIME_ID 只统计该线程的 CPU 时间
+    if (real_clock_gettime(CLOCK_THREAD_CPUTIME_ID, &state->cpu_resume_clock) == 0) {
+        state->cpu_window_active = 1;
+        state->cpu_time_since_resume_ns = 0;
+    } else {
+        // 获取时间失败，禁用窗口
+        state->cpu_window_active = 0;
+    }
+}
+
+// 结束 CPU 时间计时窗口并计算 delta（在发送消息给 DES 前调用）
+// 返回计算出的 CPU 时间（纳秒），如果窗口未激活则返回 0
+static long long cpu_time_window_end(ThreadState *state) {
+    if (!state || !state->cpu_window_active) {
+        return 0;
+    }
+    
+    struct timespec now;
+    if (real_clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) {
+        state->cpu_window_active = 0;
+        return 0;
+    }
+    
+    // 计算 delta（纳秒）
+    long long delta_ns = (now.tv_sec - state->cpu_resume_clock.tv_sec) * 1000000000LL
+                       + (now.tv_nsec - state->cpu_resume_clock.tv_nsec);
+    
+    // 关闭窗口
+    state->cpu_window_active = 0;
+    state->cpu_time_since_resume_ns = delta_ns;
+    
+    return delta_ns;
 }
 
 // Connect this thread to DESD and register it
@@ -798,6 +847,9 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
         fprintf(stderr, "[LIBDESHOOK ERROR] Thread not registered with DESD\n");
         return 0;
     }
+    
+    // 获取线程状态，用于 CPU 时间采集
+    ThreadState *state = get_thread_state();
 
     // 详细调试日志：记录即将发送的 RPC 请求
     LOG_RPC("[LIBDESHOOK-RPC] R%d T%d send_msg_to_desd_and_wait_for_response: preparing to send to DESD (fd=%d, event_type=%d, req_id=%s)\n",
@@ -807,8 +859,30 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
             req_msg->event_type,
             req_msg->request_id);
 
+    // ===== CPU 时间采集：关窗并获取 delta =====
+    long long cpu_time_ns = cpu_time_window_end(state);
+
     // Send the request message
+    // 需要把 cpu_time_since_resume_ns 注入到 payload 中
     char *json_str = message_to_json(req_msg);
+    
+    // 如果有有效的 CPU 时间样本，注入到 JSON 中
+    if (cpu_time_ns > 0 && json_str) {
+        // 解析原始 JSON，添加 cpu_time_since_resume_ns 字段
+        json_error_t json_err;
+        json_t *msg_json = json_loads(json_str, 0, &json_err);
+        if (msg_json) {
+            json_t *payload_json = json_object_get(msg_json, "payload");
+            if (payload_json && json_is_object(payload_json)) {
+                json_object_set_new(payload_json, "cpu_time_since_resume_ns", json_integer(cpu_time_ns));
+            }
+            free(json_str);
+            json_str = json_dumps(msg_json, JSON_COMPACT);
+            json_decref(msg_json);
+        }
+    }
+    // 用于解析响应后的原始序列化
+    json_str = json_str; // suppress unused warning
     if (!json_str) {
         fprintf(stderr, "[LIBDESHOOK ERROR] Failed to serialize request message.\n");
         fflush(stderr);
@@ -903,6 +977,9 @@ int send_msg_to_desd_and_wait_for_response(const Message* req_msg, Message* resp
            resp_msg_out->request_id,
            resp_msg_out->event_type);
     fflush(stdout);
+
+    // ===== CPU 时间采集：开窗，线程被 DES 解除阻塞后开始计时 =====
+    cpu_time_window_start(state);
 
     return 1; // Success
 }
