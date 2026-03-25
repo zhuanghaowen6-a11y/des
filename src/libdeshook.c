@@ -1889,6 +1889,13 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
     }
     json_object_set_new(payload_obj, "monitored_fds", monitored_fds_array);
     
+    // CPU time: 关窗并注入 cpu_time_since_resume_ns
+    ThreadState *cpu_state = get_thread_state();
+    long long cpu_time_ns = cpu_time_window_end(cpu_state);
+    if (cpu_time_ns > 0) {
+        json_object_set_new(payload_obj, "cpu_time_since_resume_ns", json_integer(cpu_time_ns));
+    }
+    
     char *payload_str = json_dumps(payload_obj, JSON_COMPACT);
     strncpy(poll_block_req.payload.json_str, payload_str, MAX_MSG_SIZE - 1);
     poll_block_req.payload.json_str[MAX_MSG_SIZE - 1] = '\0';
@@ -2022,6 +2029,8 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         if (phase1_payload) json_decref(phase1_payload);
         if (non_des_fds) free(non_des_fds);
         if (non_des_orig_idx) free(non_des_orig_idx);
+        // CPU time: 重新开窗
+        cpu_time_window_start(cpu_state);
         return poll_result;
         
     } else if (phase1_status && strcmp(phase1_status, "TIMEOUT") == 0) {
@@ -2046,6 +2055,8 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
         if (phase1_payload) json_decref(phase1_payload);
         if (non_des_fds) free(non_des_fds);
         if (non_des_orig_idx) free(non_des_orig_idx);
+        // CPU time: 重新开窗
+        cpu_time_window_start(cpu_state);
         return poll_result;
         
     } else if (phase1_status && strcmp(phase1_status, "ALLOW_POLL") == 0) {
@@ -2135,6 +2146,8 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
             if (phase2_payload) json_decref(phase2_payload);
             if (non_des_fds) free(non_des_fds);
             if (non_des_orig_idx) free(non_des_orig_idx);
+            // CPU time: 重新开窗
+            cpu_time_window_start(cpu_state);
             return poll_result;
         }
         
@@ -2313,6 +2326,8 @@ static int poll_internal(struct pollfd *fds, nfds_t nfds, int timeout) {
 
     if (non_des_fds) free(non_des_fds);
     if (non_des_orig_idx) free(non_des_orig_idx);
+    // CPU time: 重新开窗
+    cpu_time_window_start(cpu_state);
     return poll_result;
 }
 
