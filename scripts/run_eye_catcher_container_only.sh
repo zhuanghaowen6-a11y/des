@@ -54,7 +54,7 @@ while [ ! -f "$T0_FILE" ]; do
     wait "$RUN_PID" || true
     exit 1
   fi
-
+done
 
 # Inject fault
 set +e
