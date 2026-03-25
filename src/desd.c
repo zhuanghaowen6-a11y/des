@@ -1689,8 +1689,10 @@ void drain_all_messages_nonblocking() {
                             router_id, thread_id, msg.request_id, current_virtual_time);
                     
                     // 仍然处理以避免线程死锁，但这表示架构假设被破坏
+                    // 提取 CPU 时间并加到事件时间戳
+                    double cpu_time_sec = extract_cpu_time_from_payload(&msg.payload);
                     Event vt_event = {
-                        .timestamp = current_virtual_time,
+                        .timestamp = current_virtual_time + cpu_time_sec,
                         .router_id = router_id,
                         .thread_id = thread_id,
                         .event_type = GET_VIRTUAL_TIME_EVENT,
@@ -1780,8 +1782,10 @@ void drain_all_messages_nonblocking() {
                             router_id, thread_id, event_type_to_string(msg.event_type), msg.request_id, thread_status, current_virtual_time);
                     
                     // 仍然处理以避免线程死锁
+                    // 提取 CPU 时间并加到事件时间戳
+                    double cpu_time_sec = extract_cpu_time_from_payload(&msg.payload);
                     Event instant_event = {
-                        .timestamp = current_virtual_time,
+                        .timestamp = current_virtual_time + cpu_time_sec,
                         .router_id = router_id,
                         .thread_id = thread_id,
                         .event_type = msg.event_type,
@@ -1799,9 +1803,9 @@ void drain_all_messages_nonblocking() {
                     }
                     pthread_mutex_unlock(&router_states_mutex);
                     
-                    printf("[DESD-DRAIN] R%d T%d sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f.\n",
+                    printf("[DESD-DRAIN] R%d T%d sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f (cpu_time=%.6f).\n",
                            router_id, thread_id, event_type_to_string(msg.event_type),
-                           msg.request_id, current_virtual_time);
+                           msg.request_id, instant_event.timestamp, cpu_time_sec);
                            
                 } else if (msg.event_type == MUTEX_LOCK_ACQUIRED ||
                            msg.event_type == MUTEX_WAIT_START ||
@@ -1945,8 +1949,10 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
             // GET_VIRTUAL_TIME: 统一入队处理，立即返回主循环让事件被处理
             // 重要：GETVT 也是阻塞型 RPC，线程在等 DESD 回复期间是 BLOCKED 状态
             if (msg.event_type == GET_VIRTUAL_TIME_EVENT) {
+                // 提取 CPU 时间并加到事件时间戳
+                double cpu_time_sec = extract_cpu_time_from_payload(&msg.payload);
                 Event vt_event = {
-                    .timestamp = current_virtual_time,
+                    .timestamp = current_virtual_time + cpu_time_sec,
                     .router_id = router_id,
                     .thread_id = thread_id,
                     .event_type = GET_VIRTUAL_TIME_EVENT,
@@ -1965,8 +1971,8 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
                 }
                 pthread_mutex_unlock(&router_states_mutex);
                 
-                printf("[DESD-INTERACT] R%d T%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), marked BLOCKED, queued at VT=%.3f. Returning to main loop.\n",
-                       router_id, thread_id, msg.request_id, current_virtual_time);
+                printf("[DESD-INTERACT] R%d T%d sent GET_VIRTUAL_TIME_EVENT (ReqID: %s), marked BLOCKED, queued at VT=%.3f (cpu_time=%.6f). Returning to main loop.\n",
+                       router_id, thread_id, msg.request_id, vt_event.timestamp, cpu_time_sec);
                 return;  // 返回主循环处理 GETVT
             }
             
@@ -1974,8 +1980,10 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
             if (msg.event_type == LISTEN_EVENT ||
                 msg.event_type == CONNECTION_INFO_EVENT ||
                 msg.event_type == CLOSE_SOCKET_EVENT) {
+                // 提取 CPU 时间并加到事件时间戳
+                double cpu_time_sec = extract_cpu_time_from_payload(&msg.payload);
                 Event instant_event = {
-                    .timestamp = current_virtual_time,
+                    .timestamp = current_virtual_time + cpu_time_sec,
                     .router_id = router_id,
                     .thread_id = thread_id,
                     .event_type = msg.event_type,
@@ -1994,9 +2002,9 @@ void interact_with_router_until_it_blocks(int active_router_id, int active_threa
                 }
                 pthread_mutex_unlock(&router_states_mutex);
                 
-                printf("[DESD-INTERACT] R%d T%d sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f. Returning to main loop.\n",
+                printf("[DESD-INTERACT] R%d T%d sent %s (ReqID: %s), marked BLOCKED, queued at VT=%.3f (cpu_time=%.6f). Returning to main loop.\n",
                        router_id, thread_id, event_type_to_string(msg.event_type),
-                       msg.request_id, current_virtual_time);
+                       msg.request_id, instant_event.timestamp, cpu_time_sec);
                 return;  // 返回主循环处理
             }
             
