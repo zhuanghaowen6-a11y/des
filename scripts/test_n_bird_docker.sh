@@ -22,6 +22,14 @@ TOPOLOGY_MODE=${TOPOLOGY_MODE,,}
 GLOBAL_CPUSET=${GLOBAL_CPUSET:-}
 DESD_CPUSET=${DESD_CPUSET:-}
 SKIP_ANALYZE=${SKIP_ANALYZE:-0}
+ENABLE_NETEM_DELAY=${ENABLE_NETEM_DELAY:-0}
+NETEM_DELAY=${NETEM_DELAY:-}
+NETEM_DELAY_IFACE=${NETEM_DELAY_IFACE:-eth0}
+
+if [ "$ENABLE_NETEM_DELAY" -ne 0 ] && [ -z "$NETEM_DELAY" ]; then
+    echo "[ERROR] ENABLE_NETEM_DELAY=1 requires NETEM_DELAY (example: 2ms)"
+    exit 1
+fi
 
 # Eye-catcher pre-disable mode: skip generating BGP blocks for ToR's non-KEEP uplinks
 # This makes the ToR single-homed from startup, eliminating the need for runtime stabilize.
@@ -98,6 +106,11 @@ echo "TOPOLOGY_MODE: $TOPOLOGY_MODE (ring/full-mesh/fat-tree-k6/fat-tree-k8-64)"
 echo "GLOBAL_CPUSET: ${GLOBAL_CPUSET:-<none>}"
 echo "DESD_CPUSET: ${DESD_CPUSET:-<none>}"
 echo "SKIP_ANALYZE: $SKIP_ANALYZE"
+echo "ENABLE_NETEM_DELAY: $ENABLE_NETEM_DELAY"
+if [ "$ENABLE_NETEM_DELAY" -ne 0 ]; then
+    echo "NETEM_DELAY: $NETEM_DELAY"
+    echo "NETEM_DELAY_IFACE: $NETEM_DELAY_IFACE"
+fi
 echo "PRE_DISABLE_OTHER_UPLINKS: $PRE_DISABLE_OTHER_UPLINKS"
 if [ "$PRE_DISABLE_OTHER_UPLINKS" -eq 1 ]; then
     echo "  TOR_ID: $TOR_ID, KEEP_AGG_ID: $KEEP_AGG_ID"
@@ -120,10 +133,21 @@ log_step() {
     echo "=========================================="
 }
 
-# 启用 core dump（在宿主机上设置，容器通过 -v /tmp:/tmp 共享）
-enable_core_dumps() {
-    log_step "开启 core dump 支持"
+apply_container_netem_delay() {
+    local container_name=$1
+    if [ "$ENABLE_NETEM_DELAY" -eq 0 ]; then
+        return 0
+    fi
+    sudo docker exec "$container_name" sh -c "command -v tc >/dev/null 2>&1"
+    sudo docker exec "$container_name" tc qdisc replace dev "$NETEM_DELAY_IFACE" root netem delay "$NETEM_DELAY"
+    log_info "✓ $container_name netem delay on $NETEM_DELAY_IFACE: $NETEM_DELAY"
+}
 
+# 启用 core dump 支持
+enable_core_dumps() {
+    if [ "$(cat /proc/sys/kernel/core_pattern 2>/dev/null)" != "/tmp/core.%e.%p.%h.%t" ]; then
+        echo '/tmp/core.%e.%p.%h.%t' | sudo tee /proc/sys/kernel/core_pattern >/dev/null
+    fi
     # 在宿主机上设置 core_pattern，让所有进程（包括容器里的 BIRD）把 core 写到宿主机 /tmp
     if command -v sysctl >/dev/null 2>&1; then
         if ! sudo sysctl -w kernel.core_pattern=/tmp/core.%e.%p >/dev/null 2>&1; then
@@ -541,6 +565,8 @@ for i in $(seq 1 $NUM_ROUTERS); do
         -v /tmp/bird_r${i}.conf:/etc/bird/bird.conf:ro \
         ${BIRD_IMAGE:-bird:latest} \
         tail -f /dev/null
+
+    apply_container_netem_delay "r$i"
     
     log_info "✓ R$i容器已创建 ($ROUTER_IP)"
 done
