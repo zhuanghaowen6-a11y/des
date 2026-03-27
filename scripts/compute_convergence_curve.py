@@ -3,6 +3,7 @@ import os
 import sys
 import csv
 import importlib.util
+import re
 
 
 def load_analyze_module(project_root):
@@ -13,19 +14,45 @@ def load_analyze_module(project_root):
     return mod
 
 
+def extract_log_line_epoch(line, abl):
+    ts_match = re.match(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\s', line)
+    if not ts_match:
+        return None
+    return abl.parse_rfc3339_timestamp(ts_match.group(1))
+
+
+def infer_t_fail_epoch(result_dir, tor_id, keep_agg_id, abl):
+    log_path = os.path.join(result_dir, "logs", f"bird_r{tor_id}.log")
+    if not os.path.exists(log_path):
+        return None
+
+    pattern = re.compile(rf"<INFO> Disabling protocol r{keep_agg_id}\b")
+    with open(log_path, "r", errors="replace") as f:
+        for line in f:
+            if not pattern.search(line):
+                continue
+            return extract_log_line_epoch(line, abl)
+
+    return None
+
+
 def main():
     if len(sys.argv) < 3:
-        print("Usage: compute_convergence_curve.py <RESULT_DIR> <target_prefix> [topology_mode] [num_routers]")
-        print("Example: compute_convergence_curve.py results/... 192.168.41.0/24 fat-tree-k8-64 64")
+        print("Usage: compute_convergence_curve.py <RESULT_DIR> <target_prefix> [topology_mode] [num_routers] [tor_id] [keep_agg_id]")
+        print("Example: compute_convergence_curve.py results/... 192.168.41.0/24 fat-tree-k8-64 64 41 17")
         return 2
 
     result_dir = sys.argv[1]
     target_prefix = sys.argv[2]
     topology_mode = (sys.argv[3] if len(sys.argv) >= 4 else os.environ.get("TOPOLOGY_MODE") or "fat-tree-k8-64").lower()
     num_routers = int(sys.argv[4]) if len(sys.argv) >= 5 else int(os.environ.get("NUM_ROUTERS", "64"))
+    tor_id = int(sys.argv[5]) if len(sys.argv) >= 6 else int(os.environ.get("TOR_ID", "41"))
+    keep_agg_id = int(sys.argv[6]) if len(sys.argv) >= 7 else int(os.environ.get("KEEP_AGG_ID", "17"))
 
     log_dir = os.path.join(result_dir, "logs")
-    t_fail_file = os.path.join(result_dir, "meta", "t_fail_epoch.txt")
+    meta_dir = os.path.join(result_dir, "meta")
+    t_fail_file = os.path.join(meta_dir, "t_fail_epoch.txt")
+    effective_t_fail_file = os.path.join(meta_dir, "t_fail_epoch_effective.txt")
 
     if not os.path.isdir(log_dir):
         print(f"[ERROR] log dir not found: {log_dir}")
@@ -37,11 +64,22 @@ def main():
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     abl = load_analyze_module(project_root)
 
+    inferred_t_fail_epoch = infer_t_fail_epoch(result_dir, tor_id, keep_agg_id, abl)
+    if inferred_t_fail_epoch is not None:
+        os.makedirs(meta_dir, exist_ok=True)
+        with open(effective_t_fail_file, "w") as f:
+            f.write(f"{inferred_t_fail_epoch:.9f}\n")
+        t0_file = effective_t_fail_file
+        print(f"[OK] inferred t_fail_epoch={inferred_t_fail_epoch:.9f} from logs/bird_r{tor_id}.log")
+    else:
+        t0_file = t_fail_file
+        print(f"[WARN] failed to infer t_fail from logs/bird_r{tor_id}.log, falling back to {t_fail_file}")
+
     # Use wallclock mode, and set t0 to t_fail to get relative time since fault.
     os.environ["TIME_MODE"] = "wallclock"
-    os.environ["T0_FILE"] = t_fail_file
+    os.environ["T0_FILE"] = t0_file
     abl.TIME_MODE = "wallclock"
-    abl.T0_FILE = t_fail_file
+    abl.T0_FILE = t0_file
     abl.load_t0()
 
     per_router = []  # (router_id, t_converged_s)
@@ -53,7 +91,6 @@ def main():
         t_i = max(times) if times else 0.0
         per_router.append((rid, t_i))
 
-    meta_dir = os.path.join(result_dir, "meta")
     os.makedirs(meta_dir, exist_ok=True)
 
     out1 = os.path.join(meta_dir, "per_router_convergence.csv")

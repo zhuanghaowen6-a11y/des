@@ -73,7 +73,7 @@ fi
 wait "$RUN_PID"
 
 echo "[INFO] Logs collected. Computing convergence curve for prefix: $TARGET_PREFIX"
-"$PROJECT_ROOT/scripts/compute_convergence_curve.py" "$RESULT_DIR" "$TARGET_PREFIX" "$TOPOLOGY_MODE" 64
+"$PROJECT_ROOT/scripts/compute_convergence_curve.py" "$RESULT_DIR" "$TARGET_PREFIX" "$TOPOLOGY_MODE" 64 "$TOR_ID" "$KEEP_AGG_ID"
 
 echo "[DONE]"
 echo "  Result dir: $RESULT_DIR"
