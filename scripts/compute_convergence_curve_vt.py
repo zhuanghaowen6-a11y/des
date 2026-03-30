@@ -16,6 +16,35 @@ def load_analyze_module(project_root):
     return mod
 
 
+def build_curve_rows(per_router):
+    per_router_sorted = sorted(per_router, key=lambda item: (item[1], item[0]))
+    total = len(per_router_sorted)
+    cumulative_router_ids = []
+    curve_rows = []
+    idx = 0
+
+    while idx < total:
+        t_bucket_str = f"{per_router_sorted[idx][1]:.6f}"
+        t_bucket = float(t_bucket_str)
+        newly_converged_router_ids = []
+
+        while idx < total and f"{per_router_sorted[idx][1]:.6f}" == t_bucket_str:
+            newly_converged_router_ids.append(per_router_sorted[idx][0])
+            idx += 1
+
+        cumulative_router_ids.extend(newly_converged_router_ids)
+        curve_rows.append(
+            (
+                t_bucket,
+                len(cumulative_router_ids) / total,
+                newly_converged_router_ids[:],
+                cumulative_router_ids[:],
+            )
+        )
+
+    return curve_rows
+
+
 def extract_vt(line: str):
     m = re.search(r"\[VT=([\d.]+)\]", line)
     if not m:
@@ -137,22 +166,34 @@ def main():
         for rid, t in per_router:
             w.writerow([rid, f"{t:.6f}"])
 
-    times_sorted = sorted(t for _, t in per_router)
-    n = len(times_sorted)
-    curve = [(t, (i + 1) / n) for i, t in enumerate(times_sorted)]
+    curve = build_curve_rows(per_router)
 
     out2 = os.path.join(meta_dir, "convergence_curve.csv")
     with open(out2, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["t_s", "ratio"])
-        for t, r in curve:
-            w.writerow([f"{t:.6f}", f"{r:.6f}"])
+        w.writerow([
+            "t_s",
+            "ratio",
+            "newly_converged_count",
+            "newly_converged_router_ids",
+            "cumulative_converged_count",
+            "cumulative_converged_router_ids",
+        ])
+        for t, r, new_ids, cumulative_ids in curve:
+            w.writerow([
+                f"{t:.6f}",
+                f"{r:.6f}",
+                len(new_ids),
+                ";".join(f"r{rid}" for rid in new_ids),
+                len(cumulative_ids),
+                ";".join(f"r{rid}" for rid in cumulative_ids),
+            ])
 
     try:
         import matplotlib.pyplot as plt
 
-        xs = [t for t, _ in curve]
-        ys = [r for _, r in curve]
+        xs = [t for t, _, _, _ in curve]
+        ys = [r for _, r, _, _ in curve]
         plt.figure(figsize=(6, 3.5))
         plt.step(xs, ys, where="post")
         plt.xlabel("VT - t_fail (s)")
