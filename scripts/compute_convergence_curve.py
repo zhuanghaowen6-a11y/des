@@ -81,7 +81,6 @@ def main():
     log_dir = os.path.join(result_dir, "logs")
     meta_dir = os.path.join(result_dir, "meta")
     t_fail_file = os.path.join(meta_dir, "t_fail_epoch.txt")
-    effective_t_fail_file = os.path.join(meta_dir, "t_fail_epoch_effective.txt")
 
     if not os.path.isdir(log_dir):
         print(f"[ERROR] log dir not found: {log_dir}")
@@ -93,16 +92,8 @@ def main():
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     abl = load_analyze_module(project_root)
 
-    inferred_t_fail_epoch = infer_t_fail_epoch(result_dir, tor_id, keep_agg_id, abl)
-    if inferred_t_fail_epoch is not None:
-        os.makedirs(meta_dir, exist_ok=True)
-        with open(effective_t_fail_file, "w") as f:
-            f.write(f"{inferred_t_fail_epoch:.9f}\n")
-        t0_file = effective_t_fail_file
-        print(f"[OK] inferred t_fail_epoch={inferred_t_fail_epoch:.9f} from logs/bird_r{tor_id}.log")
-    else:
-        t0_file = t_fail_file
-        print(f"[WARN] failed to infer t_fail from logs/bird_r{tor_id}.log, falling back to {t_fail_file}")
+    t0_file = t_fail_file
+    print(f"[OK] using t_fail_epoch from {t_fail_file}")
 
     # Use wallclock mode, and set t0 to t_fail to get relative time since fault.
     os.environ["TIME_MODE"] = "wallclock"

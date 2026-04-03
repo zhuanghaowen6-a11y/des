@@ -1,4 +1,0 @@
-packet_send_enqueue_delay=0.002
-connection_delay=0.005
-connection_client_lead=0.001
-packet_transmission_delay=0.02

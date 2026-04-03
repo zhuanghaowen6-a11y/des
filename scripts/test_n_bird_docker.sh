@@ -16,7 +16,7 @@ SCRIPT_DIR="${PROJECT_ROOT}/scripts"
 
 # 默认参数
 NUM_ROUTERS=${1:-5}
-TEST_DURATION=${2:-60}
+TEST_DURATION=${2:-100}
 TOPOLOGY_MODE=${TOPOLOGY_MODE:-${3:-ring}}
 TOPOLOGY_MODE=${TOPOLOGY_MODE,,}
 GLOBAL_CPUSET=${GLOBAL_CPUSET:-}
@@ -701,6 +701,8 @@ echo ""
 #   2. 所有 BGP 会话是否成功建立
 #   3. 在 DESD 退出前，是否有任何 BGP 会话被协议层主动断开
 ANALYZE_SCRIPT="${SCRIPT_DIR}/analyze_bgp_logs.py"
+WALLCLOCK_T0_FILE="$RESULT_DIR/meta/bird_started_epoch.txt"
+WALLCLOCK_ANALYSIS_OUT="$RESULT_DIR/meta/analysis_wallclock.txt"
 
 if [ "$SKIP_ANALYZE" -eq 1 ]; then
     log_info "跳过 analyze_bgp_logs.py（SKIP_ANALYZE=1）"
@@ -709,6 +711,16 @@ else
     if [ -f "$ANALYZE_SCRIPT" ]; then
         python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "$LOG_DIR" "$TOPOLOGY_MODE"
         ANALYZE_RESULT=$?
+        echo ""
+        if [ -f "$WALLCLOCK_T0_FILE" ]; then
+            log_info "补充输出基于 wall-clock 的收敛时间统计"
+            RUN_MODE_LABEL="DESD 仿真" \
+            T0_FILE="$WALLCLOCK_T0_FILE" \
+            TIME_MODE=wallclock \
+            python3 "$ANALYZE_SCRIPT" "$NUM_ROUTERS" "$LOG_DIR" "$TOPOLOGY_MODE" | tee "$WALLCLOCK_ANALYSIS_OUT"
+        else
+            log_warn "未找到 $WALLCLOCK_T0_FILE，跳过 wall-clock 收敛分析"
+        fi
     else
         log_error "分析脚本不存在: $ANALYZE_SCRIPT"
         ANALYZE_RESULT=1

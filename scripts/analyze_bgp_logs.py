@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 TIME_MODE = os.environ.get('TIME_MODE', 'vt').lower()
 T0_FILE = os.environ.get('T0_FILE', '')  # wall-clock 模式下的 t0 文件路径
 T0_EPOCH = 0.0  # 全局 t0（epoch 秒）
+RUN_MODE_LABEL = os.environ.get('RUN_MODE_LABEL', '')
 
 def parse_rfc3339_timestamp(ts_str):
     """
@@ -62,6 +63,18 @@ def parse_rfc3339_timestamp(ts_str):
     except Exception:
         return None
 
+
+def parse_embedded_bird_timestamp(line):
+    try:
+        m = re.search(r'bird:\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)', line)
+        if not m:
+            return None
+        dt = datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S.%f')
+        dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
 def extract_timestamp(line):
     """
     从日志行提取时间戳。
@@ -83,6 +96,9 @@ def extract_timestamp(line):
             epoch = parse_rfc3339_timestamp(ts_match.group(1))
             if epoch is not None:
                 return epoch, False
+        epoch = parse_embedded_bird_timestamp(line)
+        if epoch is not None:
+            return epoch, False
         return None, False
 
 def load_t0():
@@ -772,7 +788,7 @@ def analyze_all_logs(num_routers, log_dir, topology_mode="full-mesh"):
         for warn in flapping_warnings:
             print(f"{Colors.YELLOW}  - {warn}{Colors.END}")
     
-    run_mode = "DESD 仿真" if TIME_MODE == 'vt' else "容器-only"
+    run_mode = RUN_MODE_LABEL or ("DESD 仿真" if TIME_MODE == 'vt' else "容器-only")
     if all_pass:
         print(f"\n{Colors.GREEN}{Colors.BOLD}{'='*60}{Colors.END}")
         print(f"{Colors.GREEN}{Colors.BOLD} ✓ PASS: 所有 BGP 会话在{run_mode}期间保持健康{Colors.END}")
