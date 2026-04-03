@@ -1,0 +1,1037 @@
+[INFO] Fat-tree k=8 (non-standard, 6 pods) topology: forcing NUM_ROUTERS=64
+==========================================
+N-Router BGP Test with Docker
+Routers: 64
+Test Duration: 150s
+KEEP_ENV: 0 (1=保留环境, 0=自动清理)
+ENABLE_STRACE: 0 (1=开启strace, 0=关闭)
+TOPOLOGY_MODE: fat-tree-k8-64 (ring/full-mesh/fat-tree-k6/fat-tree-k8-64)
+GLOBAL_CPUSET: <none>
+DESD_CPUSET: <none>
+SKIP_ANALYZE: 0
+ENABLE_NETEM_DELAY: 0
+PRE_DISABLE_OTHER_UPLINKS: 0
+==========================================
+[INFO] kernel.core_pattern 已设置为 /tmp/core.%e.%p（core 会生成在宿主机 /tmp 下）
+[INFO] Result Dir: results/des/fat-tree-k8-64_n64_20260403_170509
+
+==========================================
+ 步骤1: 编译DES项目
+==========================================
+rm -rf build/*
+rm -rf logs/*
+rm -f /tmp/desd_control_socket /tmp/router_socket 2>/dev/null || true
+✓ Cleaned build and logs
+gcc -Wall -g -Isrc -mcmodel=medium src/desd.c src/common.c -o build/desd -lrt -lpthread -ljansson
+src/desd.c:672:13: warning: ‘send_success_response_to_fd’ defined but not used [-Wunused-function]
+  672 | static void send_success_response_to_fd(int fd, const char* request_id, const char* message) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/desd.c:496:20: warning: ‘find_any_blocked_thread’ defined but not used [-Wunused-function]
+  496 | static ThreadInfo* find_any_blocked_thread(int router_id) {
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~
+src/desd.c:483:20: warning: ‘find_blocked_thread’ defined but not used [-Wunused-function]
+  483 | static ThreadInfo* find_blocked_thread(int router_id, const char *blocked_func) {
+      |                    ^~~~~~~~~~~~~~~~~~~
+src/desd.c:472:20: warning: ‘get_first_active_thread’ defined but not used [-Wunused-function]
+  472 | static ThreadInfo* get_first_active_thread(int router_id) {
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~
+src/desd.c:393:20: warning: ‘find_thread_by_socket’ defined but not used [-Wunused-function]
+  393 | static ThreadInfo* find_thread_by_socket(int router_id, int comm_fd) {
+      |                    ^~~~~~~~~~~~~~~~~~~~~
+✓ Built desd
+gcc -Wall -g -Isrc -shared -fPIC src/libdeshook.c src/common.c -o build/libdeshook.so -lrt -lpthread -ljansson -ldl -lpthread
+src/libdeshook.c:758:12: warning: ‘recv_msg_from_desd’ defined but not used [-Wunused-function]
+  758 | static int recv_msg_from_desd(Message* resp_msg_out) {
+      |            ^~~~~~~~~~~~~~~~~~
+✓ Built libdeshook.so
+[INFO] ✓ 编译完成
+
+==========================================
+ 步骤2: 生成BIRD配置文件
+==========================================
+[INFO] ✓ R1配置已创建 (AS65001, 10.0.1.1, Core)
+[INFO] ✓ R2配置已创建 (AS65002, 10.0.2.2, Core)
+[INFO] ✓ R3配置已创建 (AS65003, 10.0.3.3, Core)
+[INFO] ✓ R4配置已创建 (AS65004, 10.0.4.4, Core)
+[INFO] ✓ R5配置已创建 (AS65005, 10.0.5.5, Core)
+[INFO] ✓ R6配置已创建 (AS65006, 10.0.6.6, Core)
+[INFO] ✓ R7配置已创建 (AS65007, 10.0.7.7, Core)
+[INFO] ✓ R8配置已创建 (AS65008, 10.0.8.8, Core)
+[INFO] ✓ R9配置已创建 (AS65009, 10.0.9.9, Core)
+[INFO] ✓ R10配置已创建 (AS65010, 10.0.10.10, Core)
+[INFO] ✓ R11配置已创建 (AS65011, 10.0.11.11, Core)
+[INFO] ✓ R12配置已创建 (AS65012, 10.0.12.12, Core)
+[INFO] ✓ R13配置已创建 (AS65013, 10.0.13.13, Core)
+[INFO] ✓ R14配置已创建 (AS65014, 10.0.14.14, Core)
+[INFO] ✓ R15配置已创建 (AS65015, 10.0.15.15, Core)
+[INFO] ✓ R16配置已创建 (AS65016, 10.0.16.16, Core)
+[INFO] ✓ R17配置已创建 (AS65017, 10.0.17.17, Agg)
+[INFO] ✓ R18配置已创建 (AS65018, 10.0.18.18, Agg)
+[INFO] ✓ R19配置已创建 (AS65019, 10.0.19.19, Agg)
+[INFO] ✓ R20配置已创建 (AS65020, 10.0.20.20, Agg)
+[INFO] ✓ R21配置已创建 (AS65021, 10.0.21.21, Agg)
+[INFO] ✓ R22配置已创建 (AS65022, 10.0.22.22, Agg)
+[INFO] ✓ R23配置已创建 (AS65023, 10.0.23.23, Agg)
+[INFO] ✓ R24配置已创建 (AS65024, 10.0.24.24, Agg)
+[INFO] ✓ R25配置已创建 (AS65025, 10.0.25.25, Agg)
+[INFO] ✓ R26配置已创建 (AS65026, 10.0.26.26, Agg)
+[INFO] ✓ R27配置已创建 (AS65027, 10.0.27.27, Agg)
+[INFO] ✓ R28配置已创建 (AS65028, 10.0.28.28, Agg)
+[INFO] ✓ R29配置已创建 (AS65029, 10.0.29.29, Agg)
+[INFO] ✓ R30配置已创建 (AS65030, 10.0.30.30, Agg)
+[INFO] ✓ R31配置已创建 (AS65031, 10.0.31.31, Agg)
+[INFO] ✓ R32配置已创建 (AS65032, 10.0.32.32, Agg)
+[INFO] ✓ R33配置已创建 (AS65033, 10.0.33.33, Agg)
+[INFO] ✓ R34配置已创建 (AS65034, 10.0.34.34, Agg)
+[INFO] ✓ R35配置已创建 (AS65035, 10.0.35.35, Agg)
+[INFO] ✓ R36配置已创建 (AS65036, 10.0.36.36, Agg)
+[INFO] ✓ R37配置已创建 (AS65037, 10.0.37.37, Agg)
+[INFO] ✓ R38配置已创建 (AS65038, 10.0.38.38, Agg)
+[INFO] ✓ R39配置已创建 (AS65039, 10.0.39.39, Agg)
+[INFO] ✓ R40配置已创建 (AS65040, 10.0.40.40, Agg)
+[INFO] ✓ R41配置已创建 (AS65041, 10.0.41.41, ToR)
+[INFO] ✓ R42配置已创建 (AS65042, 10.0.42.42, ToR)
+[INFO] ✓ R43配置已创建 (AS65043, 10.0.43.43, ToR)
+[INFO] ✓ R44配置已创建 (AS65044, 10.0.44.44, ToR)
+[INFO] ✓ R45配置已创建 (AS65045, 10.0.45.45, ToR)
+[INFO] ✓ R46配置已创建 (AS65046, 10.0.46.46, ToR)
+[INFO] ✓ R47配置已创建 (AS65047, 10.0.47.47, ToR)
+[INFO] ✓ R48配置已创建 (AS65048, 10.0.48.48, ToR)
+[INFO] ✓ R49配置已创建 (AS65049, 10.0.49.49, ToR)
+[INFO] ✓ R50配置已创建 (AS65050, 10.0.50.50, ToR)
+[INFO] ✓ R51配置已创建 (AS65051, 10.0.51.51, ToR)
+[INFO] ✓ R52配置已创建 (AS65052, 10.0.52.52, ToR)
+[INFO] ✓ R53配置已创建 (AS65053, 10.0.53.53, ToR)
+[INFO] ✓ R54配置已创建 (AS65054, 10.0.54.54, ToR)
+[INFO] ✓ R55配置已创建 (AS65055, 10.0.55.55, ToR)
+[INFO] ✓ R56配置已创建 (AS65056, 10.0.56.56, ToR)
+[INFO] ✓ R57配置已创建 (AS65057, 10.0.57.57, ToR)
+[INFO] ✓ R58配置已创建 (AS65058, 10.0.58.58, ToR)
+[INFO] ✓ R59配置已创建 (AS65059, 10.0.59.59, ToR)
+[INFO] ✓ R60配置已创建 (AS65060, 10.0.60.60, ToR)
+[INFO] ✓ R61配置已创建 (AS65061, 10.0.61.61, ToR)
+[INFO] ✓ R62配置已创建 (AS65062, 10.0.62.62, ToR)
+[INFO] ✓ R63配置已创建 (AS65063, 10.0.63.63, ToR)
+[INFO] ✓ R64配置已创建 (AS65064, 10.0.64.64, ToR)
+
+==========================================
+ 步骤3: 创建Docker网络
+==========================================
+40ad995eb42ab4957c4d36c9b0bca73cbb74b8715b76b1a226632697d44b7be8
+[INFO] ✓ Docker网络: bird_test_net (10.0.0.0/16)
+
+==========================================
+ 步骤4: 创建并启动容器
+==========================================
+12592dd9b6987c2d569ce3179763949af63fab0caffffe4ab3ed354f62ed9767
+[INFO] ✓ R1容器已创建 (10.0.1.1)
+8319aaec0a63d1fdb015a1189401ee95c5885d6aa881dd2c644b8d8cede80f9a
+[INFO] ✓ R2容器已创建 (10.0.2.2)
+94a4296868ae10b7a1b7d47dec06ed96477e5caa9f71b308d09229f429b87cae
+[INFO] ✓ R3容器已创建 (10.0.3.3)
+c2ff571ccb927c41eddefbec2ba1f2703f3e94726fa5b0599821ceff6216d4b1
+[INFO] ✓ R4容器已创建 (10.0.4.4)
+52e0cd656d6354c78d7d43e701dc50980e997c73a9eff750ddefaa327db123ee
+[INFO] ✓ R5容器已创建 (10.0.5.5)
+c231c043f3cb4ad1082fcac5ad188f3f74f8a512d24005bf93ee541625470ec6
+[INFO] ✓ R6容器已创建 (10.0.6.6)
+303d2999e64e4ab21ee2753c9dc214349702caa0935a4abfc9d5615026c21311
+[INFO] ✓ R7容器已创建 (10.0.7.7)
+a2fd45a26651d4246fd2e96056ed274b05eff2a1e138894531cbc211060c47a4
+[INFO] ✓ R8容器已创建 (10.0.8.8)
+8fe9033ec5e31791b9d37001abcbfcbae5bbb032753cefea3d11b9879bc1f6a7
+[INFO] ✓ R9容器已创建 (10.0.9.9)
+2696d4d39f5cc746f11293445a64319f0c5c7035f05012f890f9bd1972c3cfaa
+[INFO] ✓ R10容器已创建 (10.0.10.10)
+eabad2e182eac8520c880866ef1ecdcd4cb53a19107c854b7111ee94a0516656
+[INFO] ✓ R11容器已创建 (10.0.11.11)
+3053badf0fd463f3d7731e45aafda929fc658a98c5687b98a3db8b5c74be4cff
+[INFO] ✓ R12容器已创建 (10.0.12.12)
+b4b247b12ccb4801d25ee5ecb258cf947f224f18aae288c3bfc64e49b6cd8225
+[INFO] ✓ R13容器已创建 (10.0.13.13)
+9c7ad4fd12ab15f10360924db8c54ff2cc785911087fb2a416fba23029f024c3
+[INFO] ✓ R14容器已创建 (10.0.14.14)
+a0504544ba8deef99e2d66f43b3cfae047eee7780cfcb62f5de83a9f326f6917
+[INFO] ✓ R15容器已创建 (10.0.15.15)
+562c87f8ac639f0c50103eae45289a89c09a2e4758631da249b09e063e40516e
+[INFO] ✓ R16容器已创建 (10.0.16.16)
+8ff833eca7ef56c7a6ad05c613cc4950307eeef41dd646c4e67c55543c073415
+[INFO] ✓ R17容器已创建 (10.0.17.17)
+870a3bb2089b3353b2944a9ad229755bcbf6f94d170d1108dbedfaeccde2f5ad
+[INFO] ✓ R18容器已创建 (10.0.18.18)
+dfbdab4652408d146a4cedb167c589cebd7e835f4266f9662505f275a1d10ba6
+[INFO] ✓ R19容器已创建 (10.0.19.19)
+aa4a17f559d3874198812744ba1f657ade6a19bd0cdfc4970a34a83bc9a0af10
+[INFO] ✓ R20容器已创建 (10.0.20.20)
+3740da5fffc1fa444467dc5d3a1a501e5db4ec0be45e993a6b53b7e208b4c520
+[INFO] ✓ R21容器已创建 (10.0.21.21)
+8a6df78a1a3a6d74f3ca207fc11a25e070e8a1948e38a5643da2e07ff79a1bed
+[INFO] ✓ R22容器已创建 (10.0.22.22)
+0e94ffe0da13462eb5f28709481f0f07c2d6e456696096332e91a2ea4b4e123b
+[INFO] ✓ R23容器已创建 (10.0.23.23)
+a84d2855d0db897f0a7d3b82033a6b13133c9d0ab2c1c766ecb5b69cce5bd8c6
+[INFO] ✓ R24容器已创建 (10.0.24.24)
+2dcac1d89e193795175a500bbf36f04f8d7d99eb79ac709d85a8ee8d02b0929a
+[INFO] ✓ R25容器已创建 (10.0.25.25)
+9b375ecbcabd5d6a6216176326906332920ee4468fb29c8d8892810cc6e726c2
+[INFO] ✓ R26容器已创建 (10.0.26.26)
+732d8e8953103fbcd69a85d8914fab7ac5d9c6f05994d494c5ff6ffb9d4f1933
+[INFO] ✓ R27容器已创建 (10.0.27.27)
+574ec01853c8ae0a2a6a65a4ce158eb4a023d7e6eb14a0622e8989ca8ed2733c
+[INFO] ✓ R28容器已创建 (10.0.28.28)
+6b67d486d5788f649e835501ffe576b4ca044c464d4161e9ae3b6637882fd7c1
+[INFO] ✓ R29容器已创建 (10.0.29.29)
+2ee8b0dae4dce1901e2f7274eb5467c497bfbaf92368d4a61c630d9681f77e5a
+[INFO] ✓ R30容器已创建 (10.0.30.30)
+bf60c7458c3f78b20483b0ec8f984bffeda7796447d66e9b017f34393a373a16
+[INFO] ✓ R31容器已创建 (10.0.31.31)
+7788aed07e7f5c152d42e73eeccae80f7a0de56fe49fb5c3c8f95868e21120a6
+[INFO] ✓ R32容器已创建 (10.0.32.32)
+e2dcbb0e0d6cd7f0a26a4e27e57263af400f118ff4b656f3d79c2411fcd8b96f
+[INFO] ✓ R33容器已创建 (10.0.33.33)
+52a49e05a0025c1943e9b177d49c2bb2ab12bce89320305525420b4c1cf8f5da
+[INFO] ✓ R34容器已创建 (10.0.34.34)
+bbb1316958f3fd9882ab5e72c734f671566b74f519d9a4e932b8e2232b1b8b63
+[INFO] ✓ R35容器已创建 (10.0.35.35)
+f73a3bde77634632349fda60f21f9aa6252f523cf8cf9f632432339f282ea63d
+[INFO] ✓ R36容器已创建 (10.0.36.36)
+44a0c2a2573219bdb49637cfffb1815f0b918fbc5b035f256ecdd32817d3df69
+[INFO] ✓ R37容器已创建 (10.0.37.37)
+eb1c2e622b8ea773006e3050b5df701fe52e4f1aba50b82ffe754d97b4aff625
+[INFO] ✓ R38容器已创建 (10.0.38.38)
+091322fa84a4fa3a23af627f2342a5038db8c48e7851829c3bff009604f5e648
+[INFO] ✓ R39容器已创建 (10.0.39.39)
+0d77b77d842b0249d8446803a874988127295a6cd057b652dbcbda903fce71a5
+[INFO] ✓ R40容器已创建 (10.0.40.40)
+b0fe12ef1d9217ec09cec2c629223bfe04177e8ae146749e2ba45fea9e6f6fb3
+[INFO] ✓ R41容器已创建 (10.0.41.41)
+d0b39a5956580ae0d34b0f9d3e94d7588e75fd2d4dadc2490de92e2b21846092
+[INFO] ✓ R42容器已创建 (10.0.42.42)
+e07915d73741f526b96af1af22df5aa5084ba51a5707ef6b3644a571cc328cca
+[INFO] ✓ R43容器已创建 (10.0.43.43)
+1fb1b4c3134ea2117c838c5a8d26111395357e41340b2c28ed33a3f72126c54d
+[INFO] ✓ R44容器已创建 (10.0.44.44)
+e910bfa062e6375d00dc68665c1ddaf34d046dd8d389fb058ac34b212765c912
+[INFO] ✓ R45容器已创建 (10.0.45.45)
+5d2fb288ed195ecfcc124a0a55dbfdecaa23c279b034bcdeeef82868d7ef372b
+[INFO] ✓ R46容器已创建 (10.0.46.46)
+af8bf0a63f2059e6a62661fb36dffbd8c3140968655c014e0f339b7fdb28ad5b
+[INFO] ✓ R47容器已创建 (10.0.47.47)
+a28c215361750a72b1e1af633ee69c35ed015f0c518908817d8c1d7e3d99cf44
+[INFO] ✓ R48容器已创建 (10.0.48.48)
+d6e461fbecdf8ab51c81b5b24fdd9db8c38eb80382caa45e81d2beecbfdb4704
+[INFO] ✓ R49容器已创建 (10.0.49.49)
+fa2c3ecdb2996b657091e1b35b38467a581b464abac8ceaf88db56e8b463fd9d
+[INFO] ✓ R50容器已创建 (10.0.50.50)
+5401778983a6e26920928110e7dc5489d1c8df792383449e276111c4deac9505
+[INFO] ✓ R51容器已创建 (10.0.51.51)
+9c49df5514dfee6f67454e2a0499c9ef5e6877003d26dddf7e282d26b530f55a
+[INFO] ✓ R52容器已创建 (10.0.52.52)
+ade7858ed1932c8c624d958bd4c7c46cc7798e8aaa654a1e355de8580f431130
+[INFO] ✓ R53容器已创建 (10.0.53.53)
+8455dc3907ab5e85274a93eb0e4df0987b5e8870b78765d2a4b421a37da3b9c2
+[INFO] ✓ R54容器已创建 (10.0.54.54)
+805bdee5f226cbda7f179058c894eb6ef3e25d42b9d8b3b9e95a50ddf59bdac7
+[INFO] ✓ R55容器已创建 (10.0.55.55)
+f3e666ca6b90db5af2a0610cede2388b7ef8990b9082b46d759a4365125ad961
+[INFO] ✓ R56容器已创建 (10.0.56.56)
+c6cdaf2a001b4d9cbe4a81d9f70bfdac6d0c5b912d972c4d1a8930f69d06eeb2
+[INFO] ✓ R57容器已创建 (10.0.57.57)
+17aad7a951653ed60c470502185e0ea9ed4c2dc7ef39a3e4c09228b41f52d9b7
+[INFO] ✓ R58容器已创建 (10.0.58.58)
+b071ba75f91d7a52a20318ea0131329312864b725e3f3f67095fd356137d80ef
+[INFO] ✓ R59容器已创建 (10.0.59.59)
+d8ab848559ba9551fe63d3a56eb05e70ddf8cc17685ce5d41b085aa10506b801
+[INFO] ✓ R60容器已创建 (10.0.60.60)
+fbfbe4b520627d91458ca4f3a4e6bcfab0cd05ab846a04af57b7f30fcb0ab421
+[INFO] ✓ R61容器已创建 (10.0.61.61)
+70c65b5f1b8d216b985054b4d05152426d893b0bdeca61bfbfad63094250ed99
+[INFO] ✓ R62容器已创建 (10.0.62.62)
+c6ac2d6428d8801069f01e5b2e9221bcb83028b30dc9ec9c741b89c837c311a4
+[INFO] ✓ R63容器已创建 (10.0.63.63)
+8c454b744c87469d8496078200d3e9d42f30794ffdae781a5f32de2c40926772
+[INFO] ✓ R64容器已创建 (10.0.64.64)
+
+==========================================
+ 步骤5: 验证UDS挂载
+==========================================
+[INFO] ✓ 所有容器都可以访问宿主机的/tmp
+
+==========================================
+ 步骤6: 部署libdeshook.so
+==========================================
+[INFO] ✓ libdeshook.so已部署到所有容器
+
+==========================================
+ 步骤6.5: 初始化 core dump 环境
+==========================================
+[INFO] ✓ 所有容器已启用 core dump（core 文件写入宿主机 /tmp）
+
+==========================================
+ 步骤7: 启动desd
+==========================================
+[INFO] desd已启动，PID: 1069516，等待 64 个路由器
+[INFO] desd socket 已创建 (尝试 2/20)
+[INFO] ✓ desd运行中，socket权限已设置
+
+==========================================
+ 步骤8: 并行启动所有BIRD进程（使用FIFO队列匹配）
+==========================================
+[INFO] 并行启动 64 个BIRD进程...
+[INFO] strace 已禁用，直接启动 BIRD
+
+==========================================
+ 步骤9: 等待仿真运行 (150s wall-clock)
+==========================================
+[INFO] desd 已退出
+
+==========================================
+ 步骤11: 收集最终日志
+==========================================
+
+[INFO] 日志已收集到 results/des/fat-tree-k8-64_n64_20260403_170509/logs
+
+==========================================
+ 步骤12: 分析测试结果
+==========================================
+
+
+[1m============================================================[0m
+[1m BGP 日志分析报告 (时间模式: VT)[0m
+[1m============================================================[0m
+
+[1m============================================================[0m
+[1m 1. DESD 状态检查[0m
+[1m============================================================[0m
+[92m✓ DESD 正常退出：Event limit reached (410000)[0m
+[94mℹ 最终虚拟时间: 5.071s, 处理事件数: 391048[0m
+
+[1m============================================================[0m
+[1m 2. BGP 会话状态检查[0m
+[1m============================================================[0m
+[94mℹ 拓扑模式: fat-tree-k8-64[0m
+
+[1mR1 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r1.log):[0m
+[92m✓ 已建立会话: r17, r21, r25, r29, r33, r37[0m
+[94mℹ DESD 断开位置: 第 4216 行 (之后的错误已忽略)[0m
+
+[1mR2 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r2.log):[0m
+[92m✓ 已建立会话: r17, r21, r25, r29, r33, r37[0m
+[94mℹ DESD 断开位置: 第 4466 行 (之后的错误已忽略)[0m
+
+[1mR3 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r3.log):[0m
+[92m✓ 已建立会话: r17, r21, r25, r29, r33, r37[0m
+[94mℹ DESD 断开位置: 第 4185 行 (之后的错误已忽略)[0m
+
+[1mR4 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r4.log):[0m
+[92m✓ 已建立会话: r17, r21, r25, r29, r33, r37[0m
+[94mℹ DESD 断开位置: 第 3762 行 (之后的错误已忽略)[0m
+
+[1mR5 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r5.log):[0m
+[92m✓ 已建立会话: r18, r22, r26, r30, r34, r38[0m
+[94mℹ DESD 断开位置: 第 3664 行 (之后的错误已忽略)[0m
+
+[1mR6 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r6.log):[0m
+[92m✓ 已建立会话: r18, r22, r26, r30, r34, r38[0m
+[94mℹ DESD 断开位置: 第 4559 行 (之后的错误已忽略)[0m
+
+[1mR7 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r7.log):[0m
+[92m✓ 已建立会话: r18, r22, r26, r30, r34, r38[0m
+[94mℹ DESD 断开位置: 第 4739 行 (之后的错误已忽略)[0m
+
+[1mR8 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r8.log):[0m
+[92m✓ 已建立会话: r18, r22, r26, r30, r34, r38[0m
+[94mℹ DESD 断开位置: 第 3762 行 (之后的错误已忽略)[0m
+
+[1mR9 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r9.log):[0m
+[92m✓ 已建立会话: r19, r23, r27, r31, r35, r39[0m
+[94mℹ DESD 断开位置: 第 3153 行 (之后的错误已忽略)[0m
+
+[1mR10 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r10.log):[0m
+[92m✓ 已建立会话: r19, r23, r27, r31, r35, r39[0m
+[94mℹ DESD 断开位置: 第 3014 行 (之后的错误已忽略)[0m
+
+[1mR11 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r11.log):[0m
+[92m✓ 已建立会话: r19, r23, r27, r31, r35, r39[0m
+[94mℹ DESD 断开位置: 第 3449 行 (之后的错误已忽略)[0m
+
+[1mR12 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r12.log):[0m
+[92m✓ 已建立会话: r19, r23, r27, r31, r35, r39[0m
+[94mℹ DESD 断开位置: 第 3120 行 (之后的错误已忽略)[0m
+
+[1mR13 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r13.log):[0m
+[92m✓ 已建立会话: r20, r24, r28, r32, r36, r40[0m
+[94mℹ DESD 断开位置: 第 3045 行 (之后的错误已忽略)[0m
+
+[1mR14 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r14.log):[0m
+[92m✓ 已建立会话: r20, r24, r28, r32, r36, r40[0m
+[94mℹ DESD 断开位置: 第 2946 行 (之后的错误已忽略)[0m
+
+[1mR15 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r15.log):[0m
+[92m✓ 已建立会话: r20, r24, r28, r32, r36, r40[0m
+[94mℹ DESD 断开位置: 第 2885 行 (之后的错误已忽略)[0m
+
+[1mR16 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r16.log):[0m
+[92m✓ 已建立会话: r20, r24, r28, r32, r36, r40[0m
+[94mℹ DESD 断开位置: 第 2980 行 (之后的错误已忽略)[0m
+
+[1mR17 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r17.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r41, r42, r43, r44[0m
+[94mℹ DESD 断开位置: 第 5415 行 (之后的错误已忽略)[0m
+
+[1mR18 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r18.log):[0m
+[92m✓ 已建立会话: r41, r42, r43, r44, r5, r6, r7, r8[0m
+[94mℹ DESD 断开位置: 第 4064 行 (之后的错误已忽略)[0m
+
+[1mR19 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r19.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r41, r42, r43, r44, r9[0m
+[94mℹ DESD 断开位置: 第 4435 行 (之后的错误已忽略)[0m
+
+[1mR20 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r20.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r41, r42, r43, r44[0m
+[94mℹ DESD 断开位置: 第 5079 行 (之后的错误已忽略)[0m
+
+[1mR21 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r21.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r45, r46, r47, r48[0m
+[94mℹ DESD 断开位置: 第 4514 行 (之后的错误已忽略)[0m
+
+[1mR22 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r22.log):[0m
+[92m✓ 已建立会话: r45, r46, r47, r48, r5, r6, r7, r8[0m
+[94mℹ DESD 断开位置: 第 5203 行 (之后的错误已忽略)[0m
+
+[1mR23 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r23.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r45, r46, r47, r48, r9[0m
+[94mℹ DESD 断开位置: 第 5236 行 (之后的错误已忽略)[0m
+
+[1mR24 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r24.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r45, r46, r47, r48[0m
+[94mℹ DESD 断开位置: 第 3620 行 (之后的错误已忽略)[0m
+
+[1mR25 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r25.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r49, r50, r51, r52[0m
+[94mℹ DESD 断开位置: 第 4845 行 (之后的错误已忽略)[0m
+
+[1mR26 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r26.log):[0m
+[92m✓ 已建立会话: r49, r5, r50, r51, r52, r6, r7, r8[0m
+[94mℹ DESD 断开位置: 第 6371 行 (之后的错误已忽略)[0m
+
+[1mR27 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r27.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r49, r50, r51, r52, r9[0m
+[94mℹ DESD 断开位置: 第 5348 行 (之后的错误已忽略)[0m
+
+[1mR28 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r28.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r49, r50, r51, r52[0m
+[94mℹ DESD 断开位置: 第 5222 行 (之后的错误已忽略)[0m
+
+[1mR29 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r29.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r53, r54, r55, r56[0m
+[94mℹ DESD 断开位置: 第 4719 行 (之后的错误已忽略)[0m
+
+[1mR30 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r30.log):[0m
+[92m✓ 已建立会话: r5, r53, r54, r55, r56, r6, r7, r8[0m
+[94mℹ DESD 断开位置: 第 5182 行 (之后的错误已忽略)[0m
+
+[1mR31 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r31.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r53, r54, r55, r56, r9[0m
+[94mℹ DESD 断开位置: 第 4205 行 (之后的错误已忽略)[0m
+
+[1mR32 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r32.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r53, r54, r55, r56[0m
+[94mℹ DESD 断开位置: 第 5236 行 (之后的错误已忽略)[0m
+
+[1mR33 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r33.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r57, r58, r59, r60[0m
+[94mℹ DESD 断开位置: 第 5291 行 (之后的错误已忽略)[0m
+
+[1mR34 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r34.log):[0m
+[92m✓ 已建立会话: r5, r57, r58, r59, r6, r60, r7, r8[0m
+[94mℹ DESD 断开位置: 第 5484 行 (之后的错误已忽略)[0m
+
+[1mR35 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r35.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r57, r58, r59, r60, r9[0m
+[94mℹ DESD 断开位置: 第 4138 行 (之后的错误已忽略)[0m
+
+[1mR36 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r36.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r57, r58, r59, r60[0m
+[94mℹ DESD 断开位置: 第 3962 行 (之后的错误已忽略)[0m
+
+[1mR37 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r37.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r61, r62, r63, r64[0m
+[94mℹ DESD 断开位置: 第 5940 行 (之后的错误已忽略)[0m
+
+[1mR38 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r38.log):[0m
+[92m✓ 已建立会话: r5, r6, r61, r62, r63, r64, r7, r8[0m
+[94mℹ DESD 断开位置: 第 5789 行 (之后的错误已忽略)[0m
+
+[1mR39 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r39.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r61, r62, r63, r64, r9[0m
+[94mℹ DESD 断开位置: 第 5360 行 (之后的错误已忽略)[0m
+
+[1mR40 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r40.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r61, r62, r63, r64[0m
+[94mℹ DESD 断开位置: 第 5022 行 (之后的错误已忽略)[0m
+
+[1mR41 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r41.log):[0m
+[92m✓ 已建立会话: r17, r18, r19, r20[0m
+[94mℹ DESD 断开位置: 第 3086 行 (之后的错误已忽略)[0m
+
+[1mR42 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r42.log):[0m
+[92m✓ 已建立会话: r17, r18, r19, r20[0m
+[94mℹ DESD 断开位置: 第 2674 行 (之后的错误已忽略)[0m
+
+[1mR43 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r43.log):[0m
+[92m✓ 已建立会话: r17, r18, r19, r20[0m
+[94mℹ DESD 断开位置: 第 3779 行 (之后的错误已忽略)[0m
+
+[1mR44 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r44.log):[0m
+[92m✓ 已建立会话: r17, r18, r19, r20[0m
+[94mℹ DESD 断开位置: 第 3358 行 (之后的错误已忽略)[0m
+
+[1mR45 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r45.log):[0m
+[92m✓ 已建立会话: r21, r22, r23, r24[0m
+[94mℹ DESD 断开位置: 第 2612 行 (之后的错误已忽略)[0m
+
+[1mR46 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r46.log):[0m
+[92m✓ 已建立会话: r21, r22, r23, r24[0m
+[94mℹ DESD 断开位置: 第 3004 行 (之后的错误已忽略)[0m
+
+[1mR47 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r47.log):[0m
+[92m✓ 已建立会话: r21, r22, r23, r24[0m
+[94mℹ DESD 断开位置: 第 3672 行 (之后的错误已忽略)[0m
+
+[1mR48 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r48.log):[0m
+[92m✓ 已建立会话: r21, r22, r23, r24[0m
+[94mℹ DESD 断开位置: 第 3380 行 (之后的错误已忽略)[0m
+
+[1mR49 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r49.log):[0m
+[92m✓ 已建立会话: r25, r26, r27, r28[0m
+[94mℹ DESD 断开位置: 第 3071 行 (之后的错误已忽略)[0m
+
+[1mR50 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r50.log):[0m
+[92m✓ 已建立会话: r25, r26, r27, r28[0m
+[94mℹ DESD 断开位置: 第 3152 行 (之后的错误已忽略)[0m
+
+[1mR51 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r51.log):[0m
+[92m✓ 已建立会话: r25, r26, r27, r28[0m
+[94mℹ DESD 断开位置: 第 3254 行 (之后的错误已忽略)[0m
+
+[1mR52 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r52.log):[0m
+[92m✓ 已建立会话: r25, r26, r27, r28[0m
+[94mℹ DESD 断开位置: 第 4130 行 (之后的错误已忽略)[0m
+
+[1mR53 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r53.log):[0m
+[92m✓ 已建立会话: r29, r30, r31, r32[0m
+[94mℹ DESD 断开位置: 第 3449 行 (之后的错误已忽略)[0m
+
+[1mR54 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r54.log):[0m
+[92m✓ 已建立会话: r29, r30, r31, r32[0m
+[94mℹ DESD 断开位置: 第 3574 行 (之后的错误已忽略)[0m
+
+[1mR55 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r55.log):[0m
+[92m✓ 已建立会话: r29, r30, r31, r32[0m
+[94mℹ DESD 断开位置: 第 1875 行 (之后的错误已忽略)[0m
+
+[1mR56 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r56.log):[0m
+[92m✓ 已建立会话: r29, r30, r31, r32[0m
+[94mℹ DESD 断开位置: 第 3618 行 (之后的错误已忽略)[0m
+
+[1mR57 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r57.log):[0m
+[92m✓ 已建立会话: r33, r34, r35, r36[0m
+[94mℹ DESD 断开位置: 第 3600 行 (之后的错误已忽略)[0m
+
+[1mR58 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r58.log):[0m
+[92m✓ 已建立会话: r33, r34, r35, r36[0m
+[94mℹ DESD 断开位置: 第 2230 行 (之后的错误已忽略)[0m
+
+[1mR59 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r59.log):[0m
+[92m✓ 已建立会话: r33, r34, r35, r36[0m
+[94mℹ DESD 断开位置: 第 1925 行 (之后的错误已忽略)[0m
+
+[1mR60 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r60.log):[0m
+[92m✓ 已建立会话: r33, r34, r35, r36[0m
+[94mℹ DESD 断开位置: 第 3763 行 (之后的错误已忽略)[0m
+
+[1mR61 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r61.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r40[0m
+[94mℹ DESD 断开位置: 第 3807 行 (之后的错误已忽略)[0m
+
+[1mR62 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r62.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r40[0m
+[94mℹ DESD 断开位置: 第 3434 行 (之后的错误已忽略)[0m
+
+[1mR63 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r63.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r40[0m
+[94mℹ DESD 断开位置: 第 3654 行 (之后的错误已忽略)[0m
+
+[1mR64 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r64.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r40[0m
+[94mℹ DESD 断开位置: 第 3214 行 (之后的错误已忽略)[0m
+
+[1m============================================================[0m
+[1m 3. 测试结果总结[0m
+[1m============================================================[0m
+
+[1m会话统计 (Fat-Tree k=8 (non-standard, 6 pods)):[0m
+  期望会话数: 384
+  成功建立数: 384
+  从未建立数: 0
+  异常断开数: 0 (最终状态为 down)
+  抖动会话数: 0 (>= 3 次 close/down)
+
+[1m收敛时间 (基于 VT 标签):[0m
+  T_session (最后一个会话建立): [92m5.030s VT[0m
+  带时间戳的会话数: 384/384
+
+[1m路由收敛时间 (基于 VT 标签):[0m
+  T_route_rib (最后一次 best 路由变更): [92m5.068s VT[0m
+  检测到的 [best] 路由变更数: 7212
+  T_update_quiescence (最后一次路由更新): [92m5.071s VT[0m
+  检测到的路由更新事件数: 55592
+
+[1m最终判定:[0m
+
+[92m[1m============================================================[0m
+[92m[1m ✓ PASS: 所有 BGP 会话在DESD 仿真期间保持健康[0m
+[92m[1m============================================================[0m
+
+
+[INFO] 补充输出基于 wall-clock 的收敛时间统计
+[94mℹ 已加载 t0 = 1775207142.425724 (from results/des/fat-tree-k8-64_n64_20260403_170509/meta/bird_started_epoch.txt)[0m
+
+[1m============================================================[0m
+[1m BGP 日志分析报告 (时间模式: wall-clock)[0m
+[1m============================================================[0m
+
+[1m============================================================[0m
+[1m 1. 容器-only 模式 (无 DESD)[0m
+[1m============================================================[0m
+[94mℹ 跳过 DESD 日志检查（wallclock 模式）[0m
+
+[1m============================================================[0m
+[1m 2. BGP 会话状态检查[0m
+[1m============================================================[0m
+[94mℹ 拓扑模式: fat-tree-k8-64[0m
+
+[1mR1 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r1.log):[0m
+[92m✓ 已建立会话: r17, r21, r25, r29, r33, r37[0m
+[94mℹ DESD 断开位置: 第 4216 行 (之后的错误已忽略)[0m
+
+[1mR2 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r2.log):[0m
+[92m✓ 已建立会话: r17, r21, r25, r29, r33, r37[0m
+[94mℹ DESD 断开位置: 第 4466 行 (之后的错误已忽略)[0m
+
+[1mR3 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r3.log):[0m
+[92m✓ 已建立会话: r17, r21, r25, r29, r33, r37[0m
+[94mℹ DESD 断开位置: 第 4185 行 (之后的错误已忽略)[0m
+
+[1mR4 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r4.log):[0m
+[92m✓ 已建立会话: r17, r21, r25, r29, r33, r37[0m
+[94mℹ DESD 断开位置: 第 3762 行 (之后的错误已忽略)[0m
+
+[1mR5 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r5.log):[0m
+[92m✓ 已建立会话: r18, r22, r26, r30, r34, r38[0m
+[94mℹ DESD 断开位置: 第 3664 行 (之后的错误已忽略)[0m
+
+[1mR6 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r6.log):[0m
+[92m✓ 已建立会话: r18, r22, r26, r30, r34, r38[0m
+[94mℹ DESD 断开位置: 第 4559 行 (之后的错误已忽略)[0m
+
+[1mR7 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r7.log):[0m
+[92m✓ 已建立会话: r18, r22, r26, r30, r34, r38[0m
+[94mℹ DESD 断开位置: 第 4739 行 (之后的错误已忽略)[0m
+
+[1mR8 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r8.log):[0m
+[92m✓ 已建立会话: r18, r22, r26, r30, r34, r38[0m
+[94mℹ DESD 断开位置: 第 3762 行 (之后的错误已忽略)[0m
+
+[1mR9 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r9.log):[0m
+[92m✓ 已建立会话: r19, r23, r27, r31, r35, r39[0m
+[94mℹ DESD 断开位置: 第 3153 行 (之后的错误已忽略)[0m
+
+[1mR10 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r10.log):[0m
+[92m✓ 已建立会话: r19, r23, r27, r31, r35, r39[0m
+[94mℹ DESD 断开位置: 第 3014 行 (之后的错误已忽略)[0m
+
+[1mR11 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r11.log):[0m
+[92m✓ 已建立会话: r19, r23, r27, r31, r35, r39[0m
+[94mℹ DESD 断开位置: 第 3449 行 (之后的错误已忽略)[0m
+
+[1mR12 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r12.log):[0m
+[92m✓ 已建立会话: r19, r23, r27, r31, r35, r39[0m
+[94mℹ DESD 断开位置: 第 3120 行 (之后的错误已忽略)[0m
+
+[1mR13 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r13.log):[0m
+[92m✓ 已建立会话: r20, r24, r28, r32, r36, r40[0m
+[94mℹ DESD 断开位置: 第 3045 行 (之后的错误已忽略)[0m
+
+[1mR14 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r14.log):[0m
+[92m✓ 已建立会话: r20, r24, r28, r32, r36, r40[0m
+[94mℹ DESD 断开位置: 第 2946 行 (之后的错误已忽略)[0m
+
+[1mR15 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r15.log):[0m
+[92m✓ 已建立会话: r20, r24, r28, r32, r36, r40[0m
+[94mℹ DESD 断开位置: 第 2885 行 (之后的错误已忽略)[0m
+
+[1mR16 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r16.log):[0m
+[92m✓ 已建立会话: r20, r24, r28, r32, r36, r40[0m
+[94mℹ DESD 断开位置: 第 2980 行 (之后的错误已忽略)[0m
+
+[1mR17 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r17.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r41, r42, r43, r44[0m
+[94mℹ DESD 断开位置: 第 5415 行 (之后的错误已忽略)[0m
+
+[1mR18 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r18.log):[0m
+[92m✓ 已建立会话: r41, r42, r43, r44, r5, r6, r7, r8[0m
+[94mℹ DESD 断开位置: 第 4064 行 (之后的错误已忽略)[0m
+
+[1mR19 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r19.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r41, r42, r43, r44, r9[0m
+[94mℹ DESD 断开位置: 第 4435 行 (之后的错误已忽略)[0m
+
+[1mR20 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r20.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r41, r42, r43, r44[0m
+[94mℹ DESD 断开位置: 第 5079 行 (之后的错误已忽略)[0m
+
+[1mR21 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r21.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r45, r46, r47, r48[0m
+[94mℹ DESD 断开位置: 第 4514 行 (之后的错误已忽略)[0m
+
+[1mR22 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r22.log):[0m
+[92m✓ 已建立会话: r45, r46, r47, r48, r5, r6, r7, r8[0m
+[94mℹ DESD 断开位置: 第 5203 行 (之后的错误已忽略)[0m
+
+[1mR23 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r23.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r45, r46, r47, r48, r9[0m
+[94mℹ DESD 断开位置: 第 5236 行 (之后的错误已忽略)[0m
+
+[1mR24 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r24.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r45, r46, r47, r48[0m
+[94mℹ DESD 断开位置: 第 3620 行 (之后的错误已忽略)[0m
+
+[1mR25 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r25.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r49, r50, r51, r52[0m
+[94mℹ DESD 断开位置: 第 4845 行 (之后的错误已忽略)[0m
+
+[1mR26 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r26.log):[0m
+[92m✓ 已建立会话: r49, r5, r50, r51, r52, r6, r7, r8[0m
+[94mℹ DESD 断开位置: 第 6371 行 (之后的错误已忽略)[0m
+
+[1mR27 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r27.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r49, r50, r51, r52, r9[0m
+[94mℹ DESD 断开位置: 第 5348 行 (之后的错误已忽略)[0m
+
+[1mR28 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r28.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r49, r50, r51, r52[0m
+[94mℹ DESD 断开位置: 第 5222 行 (之后的错误已忽略)[0m
+
+[1mR29 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r29.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r53, r54, r55, r56[0m
+[94mℹ DESD 断开位置: 第 4719 行 (之后的错误已忽略)[0m
+
+[1mR30 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r30.log):[0m
+[92m✓ 已建立会话: r5, r53, r54, r55, r56, r6, r7, r8[0m
+[94mℹ DESD 断开位置: 第 5182 行 (之后的错误已忽略)[0m
+
+[1mR31 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r31.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r53, r54, r55, r56, r9[0m
+[94mℹ DESD 断开位置: 第 4205 行 (之后的错误已忽略)[0m
+
+[1mR32 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r32.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r53, r54, r55, r56[0m
+[94mℹ DESD 断开位置: 第 5236 行 (之后的错误已忽略)[0m
+
+[1mR33 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r33.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r57, r58, r59, r60[0m
+[94mℹ DESD 断开位置: 第 5291 行 (之后的错误已忽略)[0m
+
+[1mR34 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r34.log):[0m
+[92m✓ 已建立会话: r5, r57, r58, r59, r6, r60, r7, r8[0m
+[94mℹ DESD 断开位置: 第 5484 行 (之后的错误已忽略)[0m
+
+[1mR35 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r35.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r57, r58, r59, r60, r9[0m
+[94mℹ DESD 断开位置: 第 4138 行 (之后的错误已忽略)[0m
+
+[1mR36 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r36.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r57, r58, r59, r60[0m
+[94mℹ DESD 断开位置: 第 3962 行 (之后的错误已忽略)[0m
+
+[1mR37 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r37.log):[0m
+[92m✓ 已建立会话: r1, r2, r3, r4, r61, r62, r63, r64[0m
+[94mℹ DESD 断开位置: 第 5940 行 (之后的错误已忽略)[0m
+
+[1mR38 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r38.log):[0m
+[92m✓ 已建立会话: r5, r6, r61, r62, r63, r64, r7, r8[0m
+[94mℹ DESD 断开位置: 第 5789 行 (之后的错误已忽略)[0m
+
+[1mR39 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r39.log):[0m
+[92m✓ 已建立会话: r10, r11, r12, r61, r62, r63, r64, r9[0m
+[94mℹ DESD 断开位置: 第 5360 行 (之后的错误已忽略)[0m
+
+[1mR40 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r40.log):[0m
+[92m✓ 已建立会话: r13, r14, r15, r16, r61, r62, r63, r64[0m
+[94mℹ DESD 断开位置: 第 5022 行 (之后的错误已忽略)[0m
+
+[1mR41 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r41.log):[0m
+[92m✓ 已建立会话: r17, r18, r19, r20[0m
+[94mℹ DESD 断开位置: 第 3086 行 (之后的错误已忽略)[0m
+
+[1mR42 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r42.log):[0m
+[92m✓ 已建立会话: r17, r18, r19, r20[0m
+[94mℹ DESD 断开位置: 第 2674 行 (之后的错误已忽略)[0m
+
+[1mR43 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r43.log):[0m
+[92m✓ 已建立会话: r17, r18, r19, r20[0m
+[94mℹ DESD 断开位置: 第 3779 行 (之后的错误已忽略)[0m
+
+[1mR44 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r44.log):[0m
+[92m✓ 已建立会话: r17, r18, r19, r20[0m
+[94mℹ DESD 断开位置: 第 3358 行 (之后的错误已忽略)[0m
+
+[1mR45 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r45.log):[0m
+[92m✓ 已建立会话: r21, r22, r23, r24[0m
+[94mℹ DESD 断开位置: 第 2612 行 (之后的错误已忽略)[0m
+
+[1mR46 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r46.log):[0m
+[92m✓ 已建立会话: r21, r22, r23, r24[0m
+[94mℹ DESD 断开位置: 第 3004 行 (之后的错误已忽略)[0m
+
+[1mR47 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r47.log):[0m
+[92m✓ 已建立会话: r21, r22, r23, r24[0m
+[94mℹ DESD 断开位置: 第 3672 行 (之后的错误已忽略)[0m
+
+[1mR48 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r48.log):[0m
+[92m✓ 已建立会话: r21, r22, r23, r24[0m
+[94mℹ DESD 断开位置: 第 3380 行 (之后的错误已忽略)[0m
+
+[1mR49 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r49.log):[0m
+[92m✓ 已建立会话: r25, r26, r27, r28[0m
+[94mℹ DESD 断开位置: 第 3071 行 (之后的错误已忽略)[0m
+
+[1mR50 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r50.log):[0m
+[92m✓ 已建立会话: r25, r26, r27, r28[0m
+[94mℹ DESD 断开位置: 第 3152 行 (之后的错误已忽略)[0m
+
+[1mR51 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r51.log):[0m
+[92m✓ 已建立会话: r25, r26, r27, r28[0m
+[94mℹ DESD 断开位置: 第 3254 行 (之后的错误已忽略)[0m
+
+[1mR52 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r52.log):[0m
+[92m✓ 已建立会话: r25, r26, r27, r28[0m
+[94mℹ DESD 断开位置: 第 4130 行 (之后的错误已忽略)[0m
+
+[1mR53 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r53.log):[0m
+[92m✓ 已建立会话: r29, r30, r31, r32[0m
+[94mℹ DESD 断开位置: 第 3449 行 (之后的错误已忽略)[0m
+
+[1mR54 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r54.log):[0m
+[92m✓ 已建立会话: r29, r30, r31, r32[0m
+[94mℹ DESD 断开位置: 第 3574 行 (之后的错误已忽略)[0m
+
+[1mR55 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r55.log):[0m
+[92m✓ 已建立会话: r29, r30, r31, r32[0m
+[94mℹ DESD 断开位置: 第 1875 行 (之后的错误已忽略)[0m
+
+[1mR56 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r56.log):[0m
+[92m✓ 已建立会话: r29, r30, r31, r32[0m
+[94mℹ DESD 断开位置: 第 3618 行 (之后的错误已忽略)[0m
+
+[1mR57 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r57.log):[0m
+[92m✓ 已建立会话: r33, r34, r35, r36[0m
+[94mℹ DESD 断开位置: 第 3600 行 (之后的错误已忽略)[0m
+
+[1mR58 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r58.log):[0m
+[92m✓ 已建立会话: r33, r34, r35, r36[0m
+[94mℹ DESD 断开位置: 第 2230 行 (之后的错误已忽略)[0m
+
+[1mR59 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r59.log):[0m
+[92m✓ 已建立会话: r33, r34, r35, r36[0m
+[94mℹ DESD 断开位置: 第 1925 行 (之后的错误已忽略)[0m
+
+[1mR60 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r60.log):[0m
+[92m✓ 已建立会话: r33, r34, r35, r36[0m
+[94mℹ DESD 断开位置: 第 3763 行 (之后的错误已忽略)[0m
+
+[1mR61 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r61.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r40[0m
+[94mℹ DESD 断开位置: 第 3807 行 (之后的错误已忽略)[0m
+
+[1mR62 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r62.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r40[0m
+[94mℹ DESD 断开位置: 第 3434 行 (之后的错误已忽略)[0m
+
+[1mR63 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r63.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r40[0m
+[94mℹ DESD 断开位置: 第 3654 行 (之后的错误已忽略)[0m
+
+[1mR64 (results/des/fat-tree-k8-64_n64_20260403_170509/logs/bird_r64.log):[0m
+[92m✓ 已建立会话: r37, r38, r39, r40[0m
+[94mℹ DESD 断开位置: 第 3214 行 (之后的错误已忽略)[0m
+
+[1m============================================================[0m
+[1m 3. 测试结果总结[0m
+[1m============================================================[0m
+
+[1m会话统计 (Fat-Tree k=8 (non-standard, 6 pods)):[0m
+  期望会话数: 384
+  成功建立数: 384
+  从未建立数: 0
+  异常断开数: 0 (最终状态为 down)
+  抖动会话数: 0 (>= 3 次 close/down)
+
+[1m收敛时间 (基于 wall-clock):[0m
+  T_session (最后一个会话建立): [92m66.337s[0m
+  带时间戳的会话数: 384/384
+
+[1m路由收敛时间 (基于 wall-clock):[0m
+  T_route_rib (最后一次 best 路由变更): [92m68.726s[0m
+  检测到的 [best] 路由变更数: 7212
+  T_update_quiescence (最后一次路由更新): [92m69.029s[0m
+  检测到的路由更新事件数: 55592
+
+[1m最终判定:[0m
+
+[92m[1m============================================================[0m
+[92m[1m ✓ PASS: 所有 BGP 会话在DESD 仿真期间保持健康[0m
+[92m[1m============================================================[0m
+
+
+🎉 测试成功！BGP 会话在整个仿真期间保持健康。
+
+测试完成（KEEP_ENV=0），将正常退出（触发trap清理）
+
+==========================================
+ 清理环境
+==========================================
+r1
+r2
+r3
+r4
+r5
+r6
+r7
+r8
+r9
+r10
+r11
+r12
+r13
+r14
+r15
+r16
+r17
+r18
+r19
+r20
+r21
+r22
+r23
+r24
+r25
+r26
+r27
+r28
+r29
+r30
+r31
+r32
+r33
+r34
+r35
+r36
+r37
+r38
+r39
+r40
+r41
+r42
+r43
+r44
+r45
+r46
+r47
+r48
+r49
+r50
+r51
+r52
+r53
+r54
+r55
+r56
+r57
+r58
+r59
+r60
+r61
+r62
+r63
+r64
+r1
+r2
+r3
+r4
+r5
+r6
+r7
+r8
+r9
+r10
+r11
+r12
+r13
+r14
+r15
+r16
+r17
+r18
+r19
+r20
+r21
+r22
+r23
+r24
+r25
+r26
+r27
+r28
+r29
+r30
+r31
+r32
+r33
+r34
+r35
+r36
+r37
+r38
+r39
+r40
+r41
+r42
+r43
+r44
+r45
+r46
+r47
+r48
+r49
+r50
+r51
+r52
+r53
+r54
+r55
+r56
+r57
+r58
+r59
+r60
+r61
+r62
+r63
+r64
+[INFO] 容器已清理
+[INFO] desd已停止
+bird_test_net
+[INFO] Docker网络已清理
